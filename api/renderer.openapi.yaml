@@ -1,0 +1,144 @@
+openapi: 3.1.0
+info:
+  title: Renderer Service Contract
+  version: 0.1.0
+  description: |
+    HTTP contract between marketing-shorts-agent and a renderer service
+    that turns a メイガラシリタイ stock-commentary script into a vertical short video.
+
+    This repository bundles `renderer-stub`, a minimal implementation of
+    this contract (black background + text mp4) so the whole pipeline runs
+    end-to-end without any private dependency. A production renderer only
+    needs to implement these two endpoints.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: https://{service}.run.app/v1
+    variables:
+      service:
+        default: renderer-stub
+
+security:
+  - bearerAuth: []
+
+paths:
+  /renders:
+    post:
+      operationId: createRender
+      summary: Request rendering of one short video
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RenderRequest' }
+      responses:
+        '202':
+          description: Render job accepted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RenderJob' }
+        '400':
+          description: Invalid script (e.g. missing mandatory disclaimer)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /renders/{renderId}:
+    parameters:
+      - name: renderId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: getRender
+      summary: Poll render job status
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RenderJob' }
+        '404':
+          description: Unknown render id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Google-signed ID token (Cloud Run service-to-service auth).
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+
+    RenderRequest:
+      type: object
+      required: [ticker, title, segments]
+      properties:
+        ticker:
+          type: string
+          description: Stock ticker code (e.g. "7203")
+        title: { type: string }
+        segments:
+          type: array
+          minItems: 1
+          description: |
+            Ordered script segments. The renderer decides visual treatment
+            per segment type; numeric segments must be rendered exactly as
+            provided (no generative alteration of figures).
+          items: { $ref: '#/components/schemas/Segment' }
+        callbackUrl:
+          type: string
+          description: Optional webhook invoked when the job finishes
+
+    Segment:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          type: string
+          enum: [hook, narration, figures, disclaimer]
+          description: |
+            hook       — opening attention segment (first seconds)
+            narration  — voiced commentary
+            figures    — exact financial figures to display (must not be altered)
+            disclaimer — mandatory legal disclaimer (request is rejected if absent)
+        text: { type: string }
+        figures:
+          type: array
+          description: Structured values for `figures` segments
+          items:
+            type: object
+            required: [label, value]
+            properties:
+              label: { type: string, description: e.g. "PER" }
+              value: { type: string, description: Pre-formatted exact value, e.g. "12.3x" }
+        durationSec:
+          type: number
+          description: Target duration; renderer may adjust within ±20%
+
+    RenderJob:
+      type: object
+      required: [renderId, state]
+      properties:
+        renderId: { type: string }
+        state:
+          type: string
+          enum: [queued, rendering, done, failed]
+        videoUrl:
+          type: string
+          description: Signed URL of the finished mp4 (9:16 vertical)
+        durationSec: { type: number }
+        error: { type: string }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time }

@@ -29,6 +29,8 @@ This repository is intentionally **specific to メイガラシリタイ**: one c
 
 Stack: ADK / Gemini API / Veo / Imagen / Chirp / Lyria / Cloud Run / BigQuery.
 
+The renderer contract is published as [`api/renderer.openapi.yaml`](./api/renderer.openapi.yaml) (OpenAPI 3.1) — any service implementing its two endpoints can replace the bundled stub.
+
 ## AI disclosure
 
 This channel is operated by an AI agent and is disclosed as such on YouTube.
