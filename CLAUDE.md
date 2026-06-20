@@ -1,6 +1,6 @@
 # marketing-shorts-agent
 
-Marketing video agent for メイガラシリタイ (メイガラシリタイ) — generates and publishes Japanese-stock YouTube Shorts, operated on top of agentops-platform.
+Marketing video agent for メイガラシリタイ — generates and publishes Japanese-stock YouTube Shorts, operated on top of agentops-platform.
 
 ## コミュニケーション
 - 日本語で回答すること。コードのコメント・docstring・README は英語

@@ -2,13 +2,13 @@
 
 > Individual hackathon entry by Takumi Morimoto — 個人事業（屋号：八雲）として開発・公開
 
-A marketing video agent that produces and publishes Japanese-stock commentary YouTube Shorts for **メイガラシリタイ (メイガラシリタイ)** — and is itself operated, evaluated, and rolled back by [agentops-platform](https://github.com/takumimorimoto-yakumo/agentops-platform) as its demo application.
+A marketing video agent that produces and publishes Japanese-stock commentary YouTube Shorts for **メイガラシリタイ** — and is itself operated, evaluated, and rolled back by [agentops-platform](https://github.com/takumimorimoto-yakumo/agentops-platform) as its demo application.
 
 Built for the DevOps × AI Agent Hackathon 2026.
 
 ## What it does
 
-- Generates short-form stock commentary scripts with Gemini (メイガラシリタイ-specific templates)
+- Generates short-form stock commentary scripts with Gemini (channel-specific templates)
 - Renders videos via an external renderer service over HTTP (a stub renderer — black background + text mp4 — is bundled so the pipeline runs end-to-end)
 - Publishes to YouTube Shorts and feeds Analytics back into agentops-platform's evaluation loop
 - Enforces YMYL guards: no stock recommendations (template-level + Gemini eval detection), mandatory disclaimer captions, official primary data sources only (EDINET / J-Quants)

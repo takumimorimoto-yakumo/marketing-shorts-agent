@@ -4,7 +4,7 @@ info:
   version: 0.1.0
   description: |
     HTTP contract between marketing-shorts-agent and a renderer service
-    that turns a メイガラシリタイ stock-commentary script into a vertical short video.
+    that turns a Japanese-stock commentary script into a vertical short video.
 
     This repository bundles `renderer-stub`, a minimal implementation of
     this contract (black background + text mp4) so the whole pipeline runs
