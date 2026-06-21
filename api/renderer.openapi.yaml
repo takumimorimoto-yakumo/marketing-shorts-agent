@@ -9,7 +9,13 @@ info:
     This repository bundles `renderer-stub`, a minimal implementation of
     this contract (black background + text mp4) so the whole pipeline runs
     end-to-end without any private dependency. A production renderer only
-    needs to implement these two endpoints.
+    needs to implement these two endpoints — see the project README
+    ("Bring your own renderer") for example backends.
+
+    Versioning: this contract follows semantic versioning. Backward-
+    compatible additions bump the minor version; breaking changes bump the
+    major version. A renderer that implements a given major version stays
+    compatible across minor bumps.
   license:
     name: Apache-2.0
     identifier: Apache-2.0

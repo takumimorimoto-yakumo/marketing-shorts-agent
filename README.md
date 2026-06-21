@@ -31,6 +31,17 @@ Stack: ADK / Gemini API / Veo / Imagen / Chirp / Lyria / Cloud Run / BigQuery.
 
 The renderer contract is published as [`api/renderer.openapi.yaml`](./api/renderer.openapi.yaml) (OpenAPI 3.1) — any service implementing its two endpoints can replace the bundled stub.
 
+## Bring your own renderer
+
+The renderer is **pluggable**. The agent talks to it only through the OpenAPI contract (two endpoints), so you can swap the backend without touching the agent:
+
+- **Bundled stub** (ships today) — black background + text mp4, for local/E2E and CI.
+- **ffmpeg adapter** (reference, on the [roadmap](./docs/ROADMAP.md)) — minimal, dependency-light, runs anywhere.
+- **Remotion adapter** (reference, on the [roadmap](./docs/ROADMAP.md)) — React-based motion graphics for richer output.
+- **Your own** — any HTTP service (e.g. Shotstack / Creatomate, or a private studio renderer) that honors the contract.
+
+The contract is intentionally domain-shaped (stock-commentary segments: hook / narration / figures / disclaimer). Only the **renderer backend** is swappable — the agent itself stays specific to one channel and format. Crucially, the safety guarantees live in the *contract*, not in any one backend: figures are rendered exactly (no generative alteration) and a request missing the mandatory disclaimer is rejected — **whichever renderer you plug in**.
+
 ## AI disclosure
 
 This channel is operated by an AI agent and is disclosed as such on YouTube.

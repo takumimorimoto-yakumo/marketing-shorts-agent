@@ -65,11 +65,24 @@ pipeline orchestrator (ADK on Cloud Run)
   rollback demo runs against this agent.
 - **M6 — Real renderer cutover.** Point the renderer client at the external service
   (replacing the stub) via config. *Accept:* a real rendered Short publishes.
+- **M7 — Reference adapters (pluggability proof).** Ship two reference renderer
+  backends behind the same contract: (a) an **ffmpeg** adapter (minimal,
+  dependency-light) and (b) a **Remotion** adapter (React motion graphics).
+  *Accept:* the same script renders through stub, ffmpeg, and Remotion by config
+  switch alone, with no change to the agent.
+- **M8 — Conformance suite (minimal).** A runnable test set a third-party renderer
+  can point at to self-verify contract compliance. Minimum assertions: a request
+  missing the disclaimer segment is rejected (400); `figures` values appear
+  unaltered; valid request → 202 + pollable job. *Accept:* stub, ffmpeg, and
+  Remotion adapters all pass the suite; a deliberately non-compliant renderer fails it.
 
 ## Renderer contract boundary
 
 - The renderer is an external service. Contract = `api/renderer.openapi.yaml`
   (published here, OpenAPI 3.1). Any service implementing it can replace the stub.
+- The contract follows **semantic versioning**: minor bumps add backward-compatible
+  fields; major bumps are breaking. Reference adapters and third-party renderers
+  declare the major version they implement.
 - Audio: the renderer generates Veo clips with audio off by default and composes
   Chirp narration + Lyria BGM, so spoken stock names/figures stay exact. The client
   only sends segment intents; audio handling lives behind the contract.
