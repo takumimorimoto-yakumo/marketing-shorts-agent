@@ -1,0 +1,21 @@
+{
+  "name": "storyboard-video",
+  "version": "1.0.0",
+  "description": "Remotion project for rendering storyboards (renderer contract v1.0.0)",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "npx remotion render src/index.tsx StoryboardVideo out/video.mp4",
+    "studio": "npx remotion studio src/index.tsx"
+  },
+  "dependencies": {
+    "@remotion/renderer": "^4.0.0",
+    "remotion": "^4.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.4.0"
+  }
+}

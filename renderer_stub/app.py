@@ -116,7 +116,11 @@ def _total_duration(storyboard: _StoryboardIn) -> float:
 
 
 def _try_generate_mp4(storyboard: _StoryboardIn) -> str | None:
-    """Attempt to create a black+text mp4 using ffmpeg. Returns file path or None."""
+    """Attempt to create a black+text mp4 using ffmpeg. Returns file path or None.
+
+    Falls back to a plain black video if the drawtext filter is unavailable
+    in the local ffmpeg build (e.g. compiled without libfreetype).
+    """
     if not shutil.which("ffmpeg"):
         logger.info("ffmpeg not found; skipping real mp4 generation")
         return None
@@ -124,7 +128,25 @@ def _try_generate_mp4(storyboard: _StoryboardIn) -> str | None:
     lines = _collect_text_lines(storyboard)
     duration = min(_total_duration(storyboard), 60.0)
 
-    # Build ffmpeg drawtext filter (first 5 lines, scrolled)
+    out_dir = Path(tempfile.mkdtemp(prefix="renderer_stub_"))
+    out_path = out_dir / "output.mp4"
+
+    def _run(vf: str) -> bool:
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:r=30:d={duration}",
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    # Attempt 1: with drawtext overlays
     drawtext_parts: list[str] = []
     for i, line in enumerate(lines[:5]):
         safe = line.replace("'", "\\'").replace(":", "\\:")
@@ -132,26 +154,20 @@ def _try_generate_mp4(storyboard: _StoryboardIn) -> str | None:
         drawtext_parts.append(
             f"drawtext=text='{safe}':fontcolor=white:fontsize=28:x=20:y={y_pos}"
         )
-    vf = ",".join(drawtext_parts) if drawtext_parts else "drawtext=text='stub':fontcolor=white:fontsize=28:x=20:y=50"
+    vf_text = ",".join(drawtext_parts) if drawtext_parts else "drawtext=text='stub':fontcolor=white:fontsize=28:x=20:y=50"
 
-    out_dir = Path(tempfile.mkdtemp(prefix="renderer_stub_"))
-    out_path = out_dir / "output.mp4"
-
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", f"color=c=black:s=1080x1920:r=30:d={duration}",
-        "-vf", vf,
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-        "-movflags", "+faststart",
-        str(out_path),
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, timeout=120)
+    if _run(vf_text):
         logger.info("ffmpeg mp4 generated", extra={"path": str(out_path)})
         return str(out_path)
-    except subprocess.CalledProcessError as exc:
-        logger.warning("ffmpeg failed: %s", exc.stderr.decode()[:200])
-        return None
+
+    # Attempt 2: plain black video (drawtext filter unavailable)
+    logger.info("drawtext unavailable; generating plain black mp4 as fallback")
+    if _run("null"):
+        logger.info("ffmpeg plain mp4 generated", extra={"path": str(out_path)})
+        return str(out_path)
+
+    logger.warning("ffmpeg failed to generate mp4 even without overlays")
+    return None
 
 
 # ── Routes ───────────────────────────────────────────────────────────────────

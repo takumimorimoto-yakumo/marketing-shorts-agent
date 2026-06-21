@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     agentops_base_url: str = Field(default="https://agentops-platform.run.app")
     agentops_agent_id: str = Field(default="marketing-shorts-agent")
     agentops_api_key: str = Field(default="")
+    agentops_dry_run: bool = Field(
+        default=True,
+        description=(
+            "When True, skip real HTTP calls to agentops-platform and log instead. "
+            "Set to False only when a live agentops-platform instance is reachable."
+        ),
+    )
 
     # ── Runtime ──────────────────────────────────────────────────────────────
     dry_run: bool = Field(default=True)
