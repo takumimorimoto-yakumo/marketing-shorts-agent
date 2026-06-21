@@ -35,6 +35,27 @@ agent good enough to be operated that way.
 | YMYL guards (no-recommendation, disclaimer, primary data) | Multi-agent orchestration |
 | Bundled renderer-stub (black background + text mp4) for E2E | The real renderer (external private HTTP service) |
 
+## Public surface — definition of done
+
+The quality-determining generators (script, storyboard) and the real renderer are
+private and plugged in via config. To keep this repo a complete, credible OSS app
+rather than a hollow skeleton, the public surface must meet:
+
+- **Runnable end-to-end** — with only bundled examples/stubs, `script → storyboard
+  → (stub) render → publish(dry-run)` runs to completion. No step is a no-op placeholder.
+- **Example generators are decent, not gutted** — bundled content/storyboard generators
+  produce coherent, on-format output (generic, not channel-tuned): clearly a real Short,
+  just not optimized.
+- **Operational integration is complete** — version register, metrics push, canary, and
+  rollback hooks against agentops-platform are fully implemented (the repo's reason to exist).
+- **YMYL guards are real** — no-recommendation detection, mandatory-disclaimer enforcement,
+  primary-data-only: implemented and tested, not stubbed.
+- **Contracts + conformance shipped** — renderer contract, storyboard spec, stub, reference
+  adapters, and the conformance suite are present and pass.
+
+Rule of thumb: *private = the tuning that wins; public = a complete, honest reference app.*
+"It's private-pluggable" is never a reason to ship a no-op.
+
 ## Architecture / components
 
 ```
