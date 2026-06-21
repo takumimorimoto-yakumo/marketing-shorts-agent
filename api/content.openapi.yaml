@@ -1,0 +1,219 @@
+openapi: 3.1.0
+info:
+  title: Content Service Contract
+  version: 1.0.0
+  description: |
+    HTTP contract between marketing-shorts-agent and a content service
+    that generates a structured script for a Japanese-stock commentary Short.
+
+    ## Script model
+
+    The pipeline upstream supplies stock metadata (ticker, company name, sector,
+    and pre-verified financial figures) and expects back a Script — a flat ordered
+    list of Segments that map 1:1 to the shot types recognised by the Storyboard
+    service downstream.
+
+    ## YMYL enforcement (invariants — 400 if violated on input)
+
+    The content service MUST produce scripts that satisfy both invariants;
+    the pipeline enforces them client-side with an additional guard pass after
+    receiving the response.  Any content service that knowingly violates them
+    SHOULD return 400 so the pipeline can abort early.
+
+    1. **Disclaimer required**: the Script MUST contain at least one Segment whose
+       ``type`` is ``disclaimer``.  A Script lacking a disclaimer segment is
+       non-compliant; the pipeline guard will raise ``DisclaimerMissingError``.
+    2. **No recommendation phrasing**: the Script MUST NOT contain wording that
+       recommends buying, selling, or holding a specific security.  The pipeline
+       guard will raise ``RecommendationDetectedError`` if detected.
+
+    ## Figures are immutable
+
+    The ``figures`` field in each Segment (and in ``ScriptGenerationRequest``) carries
+    pre-verified financial values supplied by the caller.  A compliant content service
+    MUST reproduce these values verbatim in the returned Script; it MUST NOT alter,
+    round, or reformat them.
+
+    ## Versioning
+
+    This contract follows semantic versioning.  Backward-compatible additions bump
+    the minor version; breaking changes bump the major version.  A content service
+    that implements a given major version stays compatible across minor bumps.
+    Reference implementations and third-party services declare the major version
+    they implement via the ``X-Contract-Version`` response header.
+
+    ## Bring your own content service
+
+    This repository bundles ``content-stub``, a minimal implementation of this
+    contract (template-based, deterministic, no LLM) so the whole pipeline runs
+    end-to-end without any private dependency.  Any HTTP service that implements
+    this endpoint can replace the stub.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: https://{service}.run.app/v1
+    variables:
+      service:
+        default: content-stub
+
+security:
+  - bearerAuth: []
+
+paths:
+  /scripts:
+    post:
+      operationId: createScript
+      summary: Generate a stock-commentary script
+      description: |
+        Accepts stock metadata and returns a structured Script.
+
+        **400 conditions**:
+        - Generated script lacks a disclaimer segment → code ``MISSING_DISCLAIMER``
+        - Generated script contains recommendation phrasing → code ``RECOMMENDATION_DETECTED``
+        - Schema validation error → code ``INVALID_REQUEST``
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScriptGenerationRequest' }
+      responses:
+        '200':
+          description: Script generated successfully.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Script' }
+        '400':
+          description: |
+            Request rejected.  Reasons include missing disclaimer in the
+            generated output, recommendation phrasing detected, or schema
+            validation failure.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Google-signed ID token (Cloud Run service-to-service auth).
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            Machine-readable error code.  Known values:
+            MISSING_DISCLAIMER      — generated script lacks a disclaimer segment.
+            RECOMMENDATION_DETECTED — generated script contains recommendation phrasing.
+            INVALID_REQUEST         — schema validation failure.
+        message: { type: string }
+
+    # ─── Input schema ──────────────────────────────────────────────────────────
+
+    FigureItem:
+      type: object
+      required: [label, value]
+      description: |
+        A single pre-verified financial figure.  The content service MUST reproduce
+        these values verbatim in Segment.figures — no alteration, rounding, or
+        reformatting.
+      properties:
+        label:
+          type: string
+          description: 'Human-readable label, e.g. "PER", "売上高".'
+          example: "PER"
+        value:
+          type: string
+          description: |
+            Pre-formatted, pre-verified financial value supplied by the caller
+            (e.g. "12.3x", "¥1,234億").  MUST be reproduced verbatim.
+          example: "12.3x"
+
+    ScriptGenerationRequest:
+      type: object
+      required: [ticker, company_name, sector, figures]
+      description: Stock metadata required to generate a commentary script.
+      properties:
+        ticker:
+          type: string
+          description: 'Stock ticker code (e.g. "7203").'
+          example: "7203"
+        company_name:
+          type: string
+          description: Official company name.
+          example: "サンプル株式会社"
+        sector:
+          type: string
+          description: 'Sector name (e.g. "製造業", "情報技術").'
+          example: "製造業"
+        figures:
+          type: array
+          description: |
+            Pre-verified financial figures from an official primary data source
+            (EDINET / J-Quants).  The content service MUST reproduce them verbatim.
+          items: { $ref: '#/components/schemas/FigureItem' }
+
+    # ─── Output schema ─────────────────────────────────────────────────────────
+
+    SegmentType:
+      type: string
+      enum: [hook, narration, figures, disclaimer]
+      description: |
+        hook        — Opening attention segment (first few seconds).
+        narration   — Voiced commentary.
+        figures     — Financial figures display.  The ``figures`` field on this
+                      segment type MUST contain the pre-verified values verbatim.
+        disclaimer  — Mandatory legal disclaimer.  At least one Segment of this
+                      type MUST be present in the Script; absence is a contract
+                      violation.
+
+    Segment:
+      type: object
+      required: [type, text]
+      description: One segment in the flat script list.
+      properties:
+        type:
+          $ref: '#/components/schemas/SegmentType'
+        text:
+          type: string
+          description: |
+            Narration text or caption for this segment.  For disclaimer segments,
+            this MUST be a complete legal disclaimer that excludes recommendation
+            phrasing.
+        figures:
+          type: array
+          description: |
+            Pre-verified figures reproduced verbatim from the request.  Present
+            only on segments of type ``figures``.  The caller's original
+            ``FigureItem`` values MUST appear here unchanged.
+          items: { $ref: '#/components/schemas/FigureItem' }
+        duration_sec:
+          type: number
+          description: Suggested display duration for this segment in seconds.
+
+    Script:
+      type: object
+      required: [ticker, title, segments]
+      description: |
+        Structured script for one Short video.
+
+        Contract invariant: at least one Segment with ``type: disclaimer`` MUST
+        exist.  The pipeline guard re-validates this after receiving the response.
+      properties:
+        ticker:
+          type: string
+          description: Stock ticker code (echoed from the request).
+        title:
+          type: string
+          description: Human-readable title for the Short (not necessarily shown on-screen).
+        segments:
+          type: array
+          minItems: 1
+          description: Ordered list of segments that make up the script.
+          items: { $ref: '#/components/schemas/Segment' }

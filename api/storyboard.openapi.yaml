@@ -1,0 +1,266 @@
+openapi: 3.1.0
+info:
+  title: Storyboard Service Contract
+  version: 1.0.0
+  description: |
+    HTTP contract between marketing-shorts-agent and a storyboard service
+    that converts a Script into a Storyboard (the renderer contract input).
+
+    ## Storyboard model
+
+    The Storyboard produced by this service is the exact input to the Renderer
+    Service (``api/renderer.openapi.yaml``).  The schema is intentionally
+    identical so a single ``Storyboard`` object flows through both contracts
+    without translation.
+
+    ## YMYL enforcement (invariants — 400 if violated on input or output)
+
+    1. **Disclaimer required**: the output Storyboard MUST contain at least one
+       Shot whose ``type`` is ``disclaimer``.  A response lacking a disclaimer shot
+       is non-compliant; the pipeline guard will raise ``DisclaimerMissingError``.
+    2. **Figures are immutable**: any Overlay of ``kind: figure`` in the output
+       MUST reproduce the ``label`` and ``value`` fields verbatim from the
+       corresponding ``Segment.figures`` in the input Script.  The storyboard
+       service MUST NOT alter, round, or reformat figure values.
+
+    ## Versioning
+
+    This contract follows semantic versioning.  Backward-compatible additions bump
+    the minor version; breaking changes bump the major version.  A storyboard
+    service that implements a given major version stays compatible across minor
+    bumps.  Reference implementations declare the major version they implement
+    via the ``X-Contract-Version`` response header.
+
+    ## Bring your own storyboard service
+
+    This repository bundles ``storyboard-stub``, a minimal implementation of this
+    contract (template-based, deterministic, no LLM) so the whole pipeline runs
+    end-to-end without any private dependency.  Any HTTP service that implements
+    this endpoint can replace the stub.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: https://{service}.run.app/v1
+    variables:
+      service:
+        default: storyboard-stub
+
+security:
+  - bearerAuth: []
+
+paths:
+  /storyboards:
+    post:
+      operationId: createStoryboard
+      summary: Convert a script into a storyboard
+      description: |
+        Accepts a Script and returns a Storyboard ready for submission to the
+        renderer service (``api/renderer.openapi.yaml``).
+
+        **400 conditions**:
+        - Input Script lacks a disclaimer segment → code ``MISSING_DISCLAIMER``
+        - Generated Storyboard lacks a disclaimer shot → code ``MISSING_DISCLAIMER``
+        - Generated Storyboard contains altered figure values → code ``FIGURE_ALTERED``
+        - Schema validation error → code ``INVALID_REQUEST``
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Script' }
+      responses:
+        '200':
+          description: Storyboard generated successfully.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Storyboard' }
+        '400':
+          description: |
+            Request rejected.  Reasons include missing disclaimer in the input
+            script, missing disclaimer shot in the generated storyboard, figure
+            value alteration, or schema validation failure.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Google-signed ID token (Cloud Run service-to-service auth).
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            Machine-readable error code.  Known values:
+            MISSING_DISCLAIMER — disclaimer segment/shot absent.
+            FIGURE_ALTERED     — a figure overlay value differs from the input.
+            INVALID_REQUEST    — schema validation failure.
+        message: { type: string }
+
+    # ─── Input schema (Script — mirrors content.openapi.yaml) ─────────────────
+
+    FigureItem:
+      type: object
+      required: [label, value]
+      description: |
+        A single pre-verified financial figure.  Values MUST flow through to
+        figure overlays in the output Storyboard unchanged.
+      properties:
+        label:
+          type: string
+          example: "PER"
+        value:
+          type: string
+          description: Pre-formatted exact value.  MUST be reproduced verbatim.
+          example: "12.3x"
+
+    SegmentType:
+      type: string
+      enum: [hook, narration, figures, disclaimer]
+
+    Segment:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          $ref: '#/components/schemas/SegmentType'
+        text:
+          type: string
+        figures:
+          type: array
+          items: { $ref: '#/components/schemas/FigureItem' }
+        duration_sec:
+          type: number
+
+    Script:
+      type: object
+      required: [ticker, title, segments]
+      description: |
+        Structured script for one Short video (output of the Content Service).
+        At least one Segment with ``type: disclaimer`` MUST be present.
+      properties:
+        ticker:
+          type: string
+          example: "7203"
+        title:
+          type: string
+        segments:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Segment' }
+
+    # ─── Output schema (Storyboard — identical to renderer.openapi.yaml) ───────
+
+    ClipIntent:
+      type: object
+      required: [kind]
+      description: Intent for the background clip of a shot.
+      properties:
+        kind:
+          type: string
+          enum: [generative, stock, solid]
+          description: |
+            generative — Request a generative (e.g. Veo) video clip.
+            stock      — Use a stock footage clip.
+            solid      — A plain solid-color background.
+        color:
+          type: string
+          description: 'Background color for ``solid`` kind clips. CSS hex (e.g. "#000000").'
+          example: "#000000"
+        prompt:
+          type: string
+          description: Natural-language prompt for ``generative`` clips.
+        query:
+          type: string
+          description: Search query for ``stock`` clips.
+
+    Overlay:
+      type: object
+      required: [kind]
+      description: |
+        Visual element placed on top of a clip.  Overlays of kind ``figure`` are
+        IMMUTABLE: the value from the input Script MUST be reproduced verbatim.
+      properties:
+        kind:
+          type: string
+          enum: [text, figure]
+          description: |
+            text   — Free-form text overlay.
+            figure — Pre-verified financial figure.  Value MUST be verbatim.
+        text:
+          type: string
+          description: Display text for ``text`` overlays.
+        label:
+          type: string
+          description: Label for ``figure`` overlays (e.g. "PER", "売上高").
+        value:
+          type: string
+          description: |
+            Pre-formatted, pre-verified financial value for ``figure`` overlays.
+            The storyboard service MUST NOT alter this value.
+
+    ShotType:
+      type: string
+      enum: [hook, narration, figures, disclaimer]
+
+    Shot:
+      type: object
+      required: [id, type]
+      description: Atomic rendering unit.
+      properties:
+        id:
+          type: string
+        type:
+          $ref: '#/components/schemas/ShotType'
+        durationSec:
+          type: number
+        clip:
+          $ref: '#/components/schemas/ClipIntent'
+        overlays:
+          type: array
+          items: { $ref: '#/components/schemas/Overlay' }
+
+    Scene:
+      type: object
+      required: [id, shots]
+      description: Thematic unit within the Storyboard.
+      properties:
+        id:
+          type: string
+        durationSec:
+          type: number
+        shots:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/Shot' }
+
+    Storyboard:
+      type: object
+      required: [title, ticker, scenes]
+      description: |
+        Top-level rendering unit.  Represents one Short video, ready for
+        submission to the Renderer Service.
+
+        Contract invariant: at least one Shot with ``type: disclaimer`` MUST exist
+        across all scenes.
+      properties:
+        title:
+          type: string
+          description: Human-readable title of the video.
+        ticker:
+          type: string
+          description: Stock ticker code.
+          example: "7203"
+        scenes:
+          type: array
+          minItems: 1
+          description: Ordered list of scenes that make up the Short.
+          items: { $ref: '#/components/schemas/Scene' }
