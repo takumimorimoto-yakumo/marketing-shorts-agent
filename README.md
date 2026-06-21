@@ -50,6 +50,45 @@ Script generation is **pluggable** in the same spirit. This repo bundles **gener
 
 This channel is operated by an AI agent and is disclosed as such on YouTube.
 
+## Quickstart
+
+Requires Python 3.11+.
+
+```bash
+# 1. Install
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 2. Run all tests (no network, no credentials required)
+pytest
+
+# 3. Run the E2E pipeline (stub renderer, dry-run publisher)
+#    Starts renderer-stub in a background thread and runs script → storyboard → render
+pytest tests/test_e2e_pipeline.py -v
+
+# 4. Run the conformance suite (stub, ffmpeg, Remotion adapters)
+pytest tests/test_conformance.py -v
+
+# 5. Switch the renderer to the ffmpeg adapter
+#    Start the adapter: uvicorn adapters.ffmpeg_adapter.app:app --port 8081
+#    Then set RENDERER_URL=http://localhost:8081/v1 in your .env
+RENDERER_URL=http://localhost:8081/v1 pytest tests/test_conformance.py -k external
+```
+
+### Using your own renderer
+
+Set `RENDERER_URL` to any HTTP service that implements the two endpoints in
+[`api/renderer.openapi.yaml`](./api/renderer.openapi.yaml) and the pipeline
+will use it instead of the bundled stub. The contract is intentionally minimal:
+POST a storyboard, poll for the result.
+
+### Plugging in your own content generator
+
+Set `content_generator` in `PipelineConfig` to any object implementing
+`ContentGeneratorInterface` (see `src/marketing_shorts_agent/content/interface.py`).
+The bundled `ExampleContentGenerator` is a generic reference implementation;
+production deployments swap it for a channel-specific generator via config.
+
 ## Status
 
 Work in progress (hackathon period: June–July 2026).

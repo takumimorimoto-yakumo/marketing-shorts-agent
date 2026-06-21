@@ -31,6 +31,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Renderer Stub", version="1.0.0")
 
+_CONTRACT_MAJOR = "1"
+
 # In-memory job store (sufficient for stub; no persistence needed)
 _jobs: dict[str, dict] = {}
 
@@ -147,9 +149,17 @@ def _try_generate_mp4(storyboard: _StoryboardIn) -> str | None:
             return False
 
     # Attempt 1: with drawtext overlays
+    # Escape order matters: backslash first, then quote, colon, comma.
+    # Comma must be escaped because ffmpeg uses it as the filter-chain separator.
     drawtext_parts: list[str] = []
     for i, line in enumerate(lines[:5]):
-        safe = line.replace("'", "\\'").replace(":", "\\:")
+        safe = (
+            line
+            .replace("\\", "\\\\")
+            .replace("'", "\\'")
+            .replace(":", "\\:")
+            .replace(",", "\\,")
+        )
         y_pos = 50 + i * 60
         drawtext_parts.append(
             f"drawtext=text='{safe}':fontcolor=white:fontsize=28:x=20:y={y_pos}"
@@ -174,8 +184,10 @@ def _try_generate_mp4(storyboard: _StoryboardIn) -> str | None:
 
 
 @app.post("/v1/renders", status_code=202)
-def create_render(body: _RenderRequestIn) -> dict:
+def create_render(body: _RenderRequestIn, response: Response) -> dict:
     """Submit storyboard for rendering. Returns 202 + job id."""
+    response.headers["X-Contract-Version"] = _CONTRACT_MAJOR
+
     storyboard = body.storyboard
 
     # Contract enforcement: reject if no disclaimer shot
@@ -203,8 +215,10 @@ def create_render(body: _RenderRequestIn) -> dict:
 
 
 @app.get("/v1/renders/{render_id}")
-def get_render(render_id: str) -> dict:
+def get_render(render_id: str, response: Response) -> dict:
     """Poll render job status."""
+    response.headers["X-Contract-Version"] = _CONTRACT_MAJOR
+
     job = _jobs.get(render_id)
     if job is None:
         raise HTTPException(

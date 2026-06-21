@@ -120,16 +120,37 @@ def _ascii_safe(text: str, max_len: int = 60) -> str:
 
 
 def _escape_drawtext(text: str) -> str:
-    """Escape special characters for ffmpeg drawtext filter."""
-    return text.replace("\\", "\\\\").replace("'", "\\'").replace(":", "\\:")
+    """Escape special characters for ffmpeg drawtext filter.
+
+    ffmpeg drawtext filter uses the following special characters:
+      backslash  — must be escaped first to avoid double-escaping
+      single-quote — terminates the text= value
+      colon       — separates filter options
+      comma       — separates filters in the filter chain
+
+    All four must be escaped before the text is embedded in the filter string.
+    """
+    return (
+        text
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace(":", "\\:")
+        .replace(",", "\\,")
+    )
 
 
 def _shot_duration(shot: _ShotIn) -> float:
     return shot.durationSec if shot.durationSec and shot.durationSec > 0 else _DEFAULT_SHOT_DURATION_SEC
 
 
-def _build_shot_filter(shot: _ShotIn, start_frame: int, fps: int) -> str:
-    """Build ffmpeg vf drawtext filter string for one shot."""
+def _build_shot_filter(shot: _ShotIn, start_frame: int, fps: int) -> list[str]:
+    """Build ffmpeg vf drawtext filter parts for one shot.
+
+    Returns a list of individual drawtext filter strings (one per overlay).
+    Callers must join with ',' to form the complete -vf argument.
+    Returning a list (rather than a pre-joined string) prevents double-splitting
+    on commas that appear inside escaped text values.
+    """
     duration = _shot_duration(shot)
     end_frame = start_frame + int(duration * fps)
 
@@ -176,7 +197,7 @@ def _build_shot_filter(shot: _ShotIn, start_frame: int, fps: int) -> str:
             )
             y_base += 70
 
-    return ",".join(filter_parts) if filter_parts else ""
+    return filter_parts
 
 
 def _collect_all_shots(storyboard: _StoryboardIn) -> list[_ShotIn]:
@@ -238,9 +259,8 @@ def _generate_mp4(storyboard: _StoryboardIn) -> str | None:
     all_filters: list[str] = []
     current_frame = 0
     for shot in shots:
-        shot_filter = _build_shot_filter(shot, current_frame, fps)
-        if shot_filter:
-            all_filters.extend(shot_filter.split(","))
+        shot_filter_parts = _build_shot_filter(shot, current_frame, fps)
+        all_filters.extend(shot_filter_parts)
         current_frame += int(_shot_duration(shot) * fps)
 
     vf_with_text = ",".join(all_filters) if all_filters else "null"
