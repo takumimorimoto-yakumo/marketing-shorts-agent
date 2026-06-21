@@ -1,0 +1,85 @@
+# deploy/service-orchestrator.yaml — Cloud Run service config for the pipeline orchestrator.
+#
+# Replace <PROJECT_ID>, <REGION>, <REPO>, <IMAGE_TAG>, <STUB_URL> before applying.
+# To apply:
+#   gcloud run services replace deploy/service-orchestrator.yaml --region=<REGION>
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: marketing-shorts-agent
+  annotations:
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing
+
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "5"
+    spec:
+      containerConcurrency: 10
+      timeoutSeconds: 600
+      serviceAccountName: marketing-shorts-sa@<PROJECT_ID>.iam.gserviceaccount.com
+
+      containers:
+        - image: "<REGION>-docker.pkg.dev/<PROJECT_ID>/<REPO>/marketing-shorts-agent:<IMAGE_TAG>"
+          command: ["uvicorn"]
+          args:
+            - "marketing_shorts_agent.main:app"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8080"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
+          # ── Non-secret environment variables ─────────────────────────────
+          env:
+            - name: GOOGLE_CLOUD_PROJECT
+              value: "<PROJECT_ID>"
+            - name: GOOGLE_CLOUD_REGION
+              value: "<REGION>"
+            - name: DRY_RUN
+              value: "false"
+            - name: LOG_LEVEL
+              value: "INFO"
+            # RENDERER_URL: set to the renderer-stub service URL for demo/E2E,
+            # or to a private renderer service URL for production rendering.
+            # This is the only config change needed to switch renderer backends.
+            - name: RENDERER_URL
+              value: "<STUB_URL_OR_PRIVATE_RENDERER_URL>"
+            # agentops-platform integration
+            - name: AGENTOPS_BASE_URL
+              value: "https://agentops-platform-<HASH>-<REGION_ABBREV>.run.app"
+            - name: AGENTOPS_AGENT_ID
+              value: "marketing-shorts-agent"
+            # Gemini model ids
+            - name: GEMINI_SCRIPT_MODEL
+              value: "gemini-2.0-flash-001"
+            - name: GEMINI_STORYBOARD_MODEL
+              value: "gemini-2.0-flash-001"
+            - name: GEMINI_EVAL_MODEL
+              value: "gemini-2.0-flash-001"
+
+          # ── Secrets from Secret Manager ──────────────────────────────────
+          # The service account must have roles/secretmanager.secretAccessor.
+          # Values are NEVER embedded here.
+          #
+          # Example:
+          # - name: AGENTOPS_API_KEY
+          #   valueFrom:
+          #     secretKeyRef:
+          #       name: agentops-api-key
+          #       key: latest
+          # - name: YOUTUBE_CHANNEL_ID
+          #   valueFrom:
+          #     secretKeyRef:
+          #       name: youtube-channel-id
+          #       key: latest
+
+          ports:
+            - containerPort: 8080
+              protocol: TCP

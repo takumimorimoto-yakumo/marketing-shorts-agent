@@ -1,0 +1,52 @@
+# deploy/service-renderer-stub.yaml — Cloud Run service config for the renderer-stub.
+#
+# The renderer-stub is a bundled reference implementation of the renderer contract
+# (api/renderer.openapi.yaml).  It is suitable for E2E testing and demo scenarios.
+#
+# For production rendering, replace RENDERER_URL in service-orchestrator.yaml with
+# the URL of a private renderer service that also implements the same contract.
+# That private service is NOT managed by this repository.
+#
+# Replace <PROJECT_ID>, <REGION>, <REPO>, <IMAGE_TAG> before applying.
+# To apply:
+#   gcloud run services replace deploy/service-renderer-stub.yaml --region=<REGION>
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: renderer-stub
+  annotations:
+    run.googleapis.com/ingress: internal-and-cloud-load-balancing
+
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"
+        autoscaling.knative.dev/maxScale: "5"
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      serviceAccountName: marketing-shorts-sa@<PROJECT_ID>.iam.gserviceaccount.com
+
+      containers:
+        - image: "<REGION>-docker.pkg.dev/<PROJECT_ID>/<REPO>/renderer-stub:<IMAGE_TAG>"
+          command: ["uvicorn"]
+          args:
+            - "renderer_stub.app:app"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8080"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+
+          env:
+            - name: LOG_LEVEL
+              value: "INFO"
+
+          ports:
+            - containerPort: 8080
+              protocol: TCP

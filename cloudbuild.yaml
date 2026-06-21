@@ -1,0 +1,143 @@
+# Cloud Build — build, push to Artifact Registry, and deploy to Cloud Run.
+#
+# This pipeline builds and deploys two services from this repository:
+#   1. marketing-shorts-agent  — pipeline orchestrator (the main ADK agent)
+#   2. renderer-stub           — bundled stub renderer (for E2E / demo)
+#
+# The real renderer is an external private service; it is NOT built here.
+# Configure RENDERER_URL in the Cloud Run service to point it at the real renderer.
+#
+# Substitutions (override via --substitutions or trigger config):
+#   _PROJECT_ID        GCP project id
+#   _REGION            Artifact Registry + Cloud Run region (e.g. us-central1)
+#   _REPO              Artifact Registry Docker repository name
+#   _SERVICE_NAME      Cloud Run service name for the orchestrator
+#   _STUB_SERVICE_NAME Cloud Run service name for the renderer-stub
+#   _IMAGE_TAG         image tag (defaults to git short SHA)
+
+substitutions:
+  _PROJECT_ID: "your-gcp-project-id"
+  _REGION: "us-central1"
+  _REPO: "marketing-shorts"
+  _SERVICE_NAME: "marketing-shorts-agent"
+  _STUB_SERVICE_NAME: "renderer-stub"
+  _IMAGE_TAG: "${COMMIT_SHA}"
+
+# Registry base (used in multiple steps)
+# BASE = ${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}
+
+steps:
+  # ── Step 1: Build orchestrator image ─────────────────────────────────────────
+  - id: "build-orchestrator"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "--target=runtime"
+      - "--tag"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_SERVICE_NAME}:${_IMAGE_TAG}"
+      - "--tag"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_SERVICE_NAME}:latest"
+      - "--cache-from"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_SERVICE_NAME}:latest"
+      - "."
+
+  # ── Step 2: Build renderer-stub image ────────────────────────────────────────
+  # The renderer-stub shares the same Dockerfile; we override CMD at deploy time.
+  - id: "build-stub"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "--target=runtime"
+      - "--tag"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_STUB_SERVICE_NAME}:${_IMAGE_TAG}"
+      - "--tag"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_STUB_SERVICE_NAME}:latest"
+      - "--cache-from"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_STUB_SERVICE_NAME}:latest"
+      - "."
+    waitFor: ["-"]  # can run in parallel with build-orchestrator
+
+  # ── Step 3: Push all tags ─────────────────────────────────────────────────────
+  - id: "push-orchestrator"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_SERVICE_NAME}"
+    waitFor:
+      - "build-orchestrator"
+
+  - id: "push-stub"
+    name: "gcr.io/cloud-builders/docker"
+    args:
+      - "push"
+      - "--all-tags"
+      - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_STUB_SERVICE_NAME}"
+    waitFor:
+      - "build-stub"
+
+  # ── Step 4: Deploy renderer-stub (deploy first; orchestrator needs its URL) ──
+  - id: "deploy-stub"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "${_STUB_SERVICE_NAME}"
+      - "--image=${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_STUB_SERVICE_NAME}:${_IMAGE_TAG}"
+      - "--region=${_REGION}"
+      - "--platform=managed"
+      - "--no-allow-unauthenticated"
+      # Override default CMD to run the renderer-stub entry point
+      - "--command=uvicorn"
+      - "--args=renderer_stub.app:app,--host,0.0.0.0,--port,8080"
+      # Resource settings
+      - "--memory=512Mi"
+      - "--cpu=1"
+      - "--concurrency=80"
+      - "--min-instances=0"
+      - "--max-instances=5"
+      - "--update-env-vars=LOG_LEVEL=INFO"
+    waitFor:
+      - "push-stub"
+
+  # ── Step 5: Deploy orchestrator ───────────────────────────────────────────────
+  - id: "deploy-orchestrator"
+    name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
+    entrypoint: "gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "${_SERVICE_NAME}"
+      - "--image=${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_SERVICE_NAME}:${_IMAGE_TAG}"
+      - "--region=${_REGION}"
+      - "--platform=managed"
+      - "--no-allow-unauthenticated"
+      # Override CMD to run the pipeline orchestrator
+      - "--command=uvicorn"
+      - "--args=marketing_shorts_agent.main:app,--host,0.0.0.0,--port,8080"
+      # Resource settings
+      - "--memory=1Gi"
+      - "--cpu=1"
+      - "--concurrency=10"
+      - "--min-instances=0"
+      - "--max-instances=5"
+      # Non-secret env vars
+      - "--update-env-vars=GOOGLE_CLOUD_PROJECT=${_PROJECT_ID}"
+      - "--update-env-vars=GOOGLE_CLOUD_REGION=${_REGION}"
+      - "--update-env-vars=DRY_RUN=false"
+      - "--update-env-vars=LOG_LEVEL=INFO"
+      # RENDERER_URL: set to renderer-stub URL or the private renderer URL.
+      # Do NOT hard-code here; configure via Secret Manager or the Console.
+    waitFor:
+      - "push-orchestrator"
+      - "deploy-stub"
+
+images:
+  - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_SERVICE_NAME}:${_IMAGE_TAG}"
+  - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_SERVICE_NAME}:latest"
+  - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_STUB_SERVICE_NAME}:${_IMAGE_TAG}"
+  - "${_REGION}-docker.pkg.dev/${_PROJECT_ID}/${_REPO}/${_STUB_SERVICE_NAME}:latest"
+
+options:
+  logging: CLOUD_LOGGING_ONLY
