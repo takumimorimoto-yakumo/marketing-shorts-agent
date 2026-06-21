@@ -153,10 +153,12 @@ class AgentOpsAnalyticsClient(AnalyticsInterface):
                     }
                 )
 
-        # versionId is required by the schema; use agent_id as a fallback key
-        # (the actual version id is provided via the version register flow)
+        # versionId is required by the schema.  The pipeline registers a version
+        # before calling push(), so metrics.extra["version_id"] should always be
+        # present.  An empty string is used as a sentinel for dry-run / test
+        # scenarios where no registration has occurred.
         return {
-            "versionId": metrics.extra.get("version_id", agent_id),
+            "versionId": metrics.extra.get("version_id", ""),
             "source": _METRICS_SOURCE,
             "samples": samples,
         }

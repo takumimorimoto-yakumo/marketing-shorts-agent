@@ -15,8 +15,8 @@ Pipeline stages:
   5. YMYL guard (storyboard)
   6. Renderer submit + wait
   7. Publisher (dry-run by default)
-  8. Analytics push
-  9. Version register
+  8. Version register  ← must precede analytics so versionId is available
+  9. Analytics push    ← receives the real versionId from step 8
 """
 
 from __future__ import annotations
@@ -148,14 +148,8 @@ class PipelineOrchestrator:
         )
         logger.info("Publish complete", extra={"video_id": publish_result.video_id})
 
-        # 8. Analytics (best-effort — don't fail the pipeline)
-        try:
-            metrics = self._analytics.pull(publish_result.video_id)
-            self._analytics.push(metrics, self._config.agent_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Analytics step failed (non-fatal): %s", exc)
-
-        # 9. Version register
+        # 8. Version register — must run before analytics so the real versionId
+        #    is available to embed in MetricIngest.versionId (avoids agent_id fallback).
         version_id = self._version_register.register(
             VersionRecord(
                 agent_id=self._config.agent_id,
@@ -164,6 +158,17 @@ class PipelineOrchestrator:
                 metadata={"ticker": stock_info.ticker, "video_id": publish_result.video_id},
             )
         )
+        logger.info("Version registered", extra={"version_id": version_id})
+
+        # 9. Analytics (best-effort — don't fail the pipeline).
+        #    Pass version_id via metrics.extra so _build_payload can embed the
+        #    real versionId (registered in step 8) in MetricIngest.
+        try:
+            metrics = self._analytics.pull(publish_result.video_id)
+            metrics.extra["version_id"] = version_id
+            self._analytics.push(metrics, self._config.agent_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Analytics step failed (non-fatal): %s", exc)
 
         return PipelineResult(
             ticker=stock_info.ticker,

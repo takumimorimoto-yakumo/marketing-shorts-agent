@@ -374,7 +374,8 @@ class TestEvaluatorClientLive:
         )
         result = client.evaluate(sample_script)
         assert result.passed is True
-        assert result.score == pytest.approx(0.92, rel=1e-3)  # mean of drift scores
+        # Overall score = mean of ALL axis scores (drift=0.92, trajectory=0.88)
+        assert result.score == pytest.approx((0.92 + 0.88) / 2, rel=1e-3)
         assert "succeeded" in result.notes
 
     def test_evaluate_failed_state_returns_not_passed(
@@ -416,3 +417,184 @@ class TestEvaluatorClientLive:
         result = client.evaluate(sample_script)
         assert result.passed is False
         assert len(result.violations) > 0
+
+
+# ── Regression: evaluator overall score includes all axes ────────────────────
+
+
+class TestEvaluatorOverallScoreIncludesAllAxes:
+    """Regression tests: overall score must reflect drift AND trajectory axes."""
+
+    def test_overall_is_mean_of_drift_and_trajectory(
+        self,
+        httpx_mock: HTTPXMock,
+        sample_script: Script,
+    ):
+        """When both drift and trajectory are present, score = (drift + trajectory) / 2."""
+        agent_id = "marketing-shorts-agent"
+        evaluation_id = "eval-axes"
+
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{agent_id}/evaluations",
+            status_code=202,
+            json={"evaluationId": evaluation_id, "versionId": "v-001", "suiteId": "s-001", "state": "queued"},
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/evaluations/{evaluation_id}",
+            status_code=200,
+            json={
+                "evaluationId": evaluation_id,
+                "versionId": "v-001",
+                "suiteId": "s-001",
+                "state": "succeeded",
+                "scores": [
+                    {"axis": "drift", "score": 0.80, "threshold": 0.8, "pass": True},
+                    {"axis": "trajectory", "score": 0.60, "threshold": 0.5, "pass": True},
+                ],
+            },
+        )
+
+        client = AgentOpsEvaluatorClient(
+            base_url=_BASE_URL,
+            agent_id=agent_id,
+            suite_id="s-001",
+            version_id="v-001",
+            dry_run=False,
+        )
+        result = client.evaluate(sample_script)
+        assert result.passed is True
+        # Must be the mean of both axes, not just drift
+        assert result.score == pytest.approx((0.80 + 0.60) / 2, rel=1e-3)
+
+    def test_drift_only_still_works(
+        self,
+        httpx_mock: HTTPXMock,
+        sample_script: Script,
+    ):
+        """When only drift is present, score equals the drift score (backward-compat)."""
+        agent_id = "marketing-shorts-agent"
+        evaluation_id = "eval-drift-only"
+
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{agent_id}/evaluations",
+            status_code=202,
+            json={"evaluationId": evaluation_id, "versionId": "v-001", "suiteId": "s-001", "state": "queued"},
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/evaluations/{evaluation_id}",
+            status_code=200,
+            json={
+                "evaluationId": evaluation_id,
+                "state": "succeeded",
+                "scores": [
+                    {"axis": "drift", "score": 0.75, "threshold": 0.7, "pass": True},
+                ],
+            },
+        )
+
+        client = AgentOpsEvaluatorClient(
+            base_url=_BASE_URL,
+            agent_id=agent_id,
+            suite_id="s-001",
+            version_id="v-001",
+            dry_run=False,
+        )
+        result = client.evaluate(sample_script)
+        assert result.score == pytest.approx(0.75, rel=1e-3)
+
+    def test_no_scores_succeeds_with_1_0(
+        self,
+        httpx_mock: HTTPXMock,
+        sample_script: Script,
+    ):
+        """When no score entries exist and state=succeeded, score defaults to 1.0."""
+        agent_id = "marketing-shorts-agent"
+        evaluation_id = "eval-no-scores"
+
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{agent_id}/evaluations",
+            status_code=202,
+            json={"evaluationId": evaluation_id, "versionId": "v-001", "suiteId": "s-001", "state": "queued"},
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/evaluations/{evaluation_id}",
+            status_code=200,
+            json={"evaluationId": evaluation_id, "state": "succeeded", "scores": []},
+        )
+
+        client = AgentOpsEvaluatorClient(
+            base_url=_BASE_URL,
+            agent_id=agent_id,
+            suite_id="s-001",
+            version_id="v-001",
+            dry_run=False,
+        )
+        result = client.evaluate(sample_script)
+        assert result.passed is True
+        assert result.score == pytest.approx(1.0)
+
+
+# ── Regression: analytics versionId is populated from version register ────────
+
+
+class TestAnalyticsVersionIdPropagation:
+    """Regression: versionId in MetricIngest must come from version register, not agent_id fallback."""
+
+    def test_push_uses_version_id_from_extra_when_present(
+        self,
+        httpx_mock: HTTPXMock,
+    ):
+        """When metrics.extra contains version_id, the payload versionId matches it."""
+        import json
+        from marketing_shorts_agent.analytics.interface import VideoMetrics
+
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            status_code=202,
+        )
+
+        metrics = VideoMetrics(
+            video_id="yt-abc",
+            views=100,
+            average_view_duration_sec=30.0,
+            retention_rate=0.5,
+            likes=10,
+            extra={"version_id": "v-from-register-001"},
+        )
+        client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
+        client.push(metrics, "marketing-shorts-agent")
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["versionId"] == "v-from-register-001"
+
+    def test_push_uses_empty_string_when_version_id_absent(
+        self,
+        httpx_mock: HTTPXMock,
+    ):
+        """When version_id is absent from extra, versionId is an empty string (not agent_id)."""
+        import json
+        from marketing_shorts_agent.analytics.interface import VideoMetrics
+
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            status_code=202,
+        )
+
+        metrics = VideoMetrics(video_id="yt-xyz", views=0, average_view_duration_sec=0.0, retention_rate=0.0, likes=0)
+        client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
+        client.push(metrics, "marketing-shorts-agent")
+
+        body = json.loads(httpx_mock.get_requests()[0].content)
+        assert body["versionId"] == ""
+        assert body["versionId"] != "marketing-shorts-agent"
+
+
+# ── Regression: renderer_stub duration is shot-based ─────────────────────────

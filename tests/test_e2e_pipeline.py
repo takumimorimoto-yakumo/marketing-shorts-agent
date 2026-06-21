@@ -113,3 +113,27 @@ class TestE2EPipeline:
         script = gen_content.generate(self._stock_info())
         storyboard = gen_story.generate(script)
         assert storyboard.has_disclaimer()
+
+    def test_version_id_registered_before_analytics(self, renderer_stub_url: str):
+        """Regression: version_id must be a real version-register id, not agent_id fallback.
+
+        The pipeline must register a version before calling analytics.push() so
+        that MetricIngest.versionId carries the actual version id.  We verify
+        that result.version_id is not equal to the agent_id config value, which
+        was the incorrect fallback before the ordering fix.
+        """
+        config = PipelineConfig(
+            renderer_base_url=renderer_stub_url,
+            dry_run=True,
+            agent_id="marketing-shorts-agent",
+        )
+        orchestrator = PipelineOrchestrator(config)
+        result = orchestrator.run(self._stock_info())
+
+        assert result.success, f"Pipeline errors: {result.errors}"
+        # version_id must come from the version register stub (prefix "stub-ver-")
+        assert result.version_id != "marketing-shorts-agent", (
+            "version_id must not fall back to agent_id; "
+            "version register must run before analytics"
+        )
+        assert result.version_id, "version_id must not be empty"

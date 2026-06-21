@@ -90,6 +90,45 @@ class TestRendererStubContractCompliance:
         detail = resp.json().get("detail", {})
         assert detail.get("code") == "NOT_FOUND"
 
+    def test_duration_is_shot_based(self, stub_client: TestClient):
+        """durationSec in job response must equal sum of shot durationSec values.
+
+        Regression: the stub previously summed scene.durationSec instead of
+        shot.durationSec, diverging from the ffmpeg adapter calculation.
+        """
+        storyboard = Storyboard(
+            title="Duration Test",
+            ticker="9999",
+            scenes=[
+                Scene(
+                    id="s1",
+                    duration_sec=99.0,  # scene-level duration — must be ignored
+                    shots=[
+                        Shot(id="hook-0", type=ShotType.HOOK, duration_sec=3.0),
+                        Shot(id="narr-0", type=ShotType.NARRATION, duration_sec=7.0),
+                    ],
+                ),
+                Scene(
+                    id="s2",
+                    duration_sec=99.0,  # scene-level duration — must be ignored
+                    shots=[
+                        Shot(id="disc-0", type=ShotType.DISCLAIMER, duration_sec=5.0),
+                    ],
+                ),
+            ],
+        )
+        resp = stub_client.post("/v1/renders", json=_storyboard_payload(storyboard))
+        assert resp.status_code == 202
+        render_id = resp.json()["renderId"]
+
+        poll = stub_client.get(f"/v1/renders/{render_id}")
+        assert poll.status_code == 200
+        job = poll.json()
+        assert job["state"] == "done"
+        # 3.0 + 7.0 + 5.0 = 15.0 s  (shot-based)
+        # scene-based would give 99.0 + 99.0 = 198.0 s (wrong)
+        assert job["durationSec"] == pytest.approx(15.0, rel=1e-3)
+
     def test_figure_values_reproduced_verbatim(
         self, stub_client: TestClient, valid_storyboard: Storyboard
     ):

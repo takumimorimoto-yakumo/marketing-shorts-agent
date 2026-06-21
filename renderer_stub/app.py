@@ -110,11 +110,19 @@ def _collect_text_lines(storyboard: _StoryboardIn) -> list[str]:
 
 
 def _total_duration(storyboard: _StoryboardIn) -> float:
+    """Compute total video duration from shot durationSec values.
+
+    Uses shot-level durationSec (same basis as the ffmpeg adapter) so that
+    the stub and reference renderer agree on video length.  Scene-level
+    durationSec is ignored intentionally; shot durations are the authoritative
+    source in the renderer contract.
+    """
     total = sum(
-        scene.durationSec or 0.0
+        shot.durationSec or 0.0
         for scene in storyboard.scenes
+        for shot in scene.shots
     )
-    return total or 30.0  # default 30s if not specified
+    return total or 30.0  # default 30 s if all shots omit durationSec
 
 
 def _try_generate_mp4(storyboard: _StoryboardIn) -> str | None:

@@ -140,13 +140,25 @@ class AgentOpsEvaluatorClient(EvaluatorInterface):
 
     @staticmethod
     def _parse_result(run: dict) -> EvalResult:
-        """Convert an EvaluationRun dict to EvalResult."""
+        """Convert an EvaluationRun dict to EvalResult.
+
+        Overall score is the unweighted average of **all** recognised evaluation
+        axes returned by agentops-platform.  Currently the platform returns two
+        axes — ``drift`` and ``trajectory`` — and both contribute equally to the
+        overall score.  Any future axes added to the response will be included
+        automatically.  When no axis scores are present the score defaults to 1.0
+        on success and 0.0 on failure.
+        """
         state = run.get("state", "")
         passed = state in _PASSED_STATES
 
         scores: list[dict] = run.get("scores", [])
-        drift_scores = [s["score"] for s in scores if s.get("axis") == "drift"]
-        overall_score = sum(drift_scores) / len(drift_scores) if drift_scores else (1.0 if passed else 0.0)
+        all_axis_scores = [s["score"] for s in scores if "score" in s]
+        overall_score = (
+            sum(all_axis_scores) / len(all_axis_scores)
+            if all_axis_scores
+            else (1.0 if passed else 0.0)
+        )
 
         violations: list[str] = []
         if not passed:
