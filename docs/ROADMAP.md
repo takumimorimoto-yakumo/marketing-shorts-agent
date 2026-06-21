@@ -99,16 +99,26 @@ pipeline orchestrator (ADK on Cloud Run)
   unaltered; valid request → 202 + pollable job. *Accept:* stub, ffmpeg, and
   Remotion adapters all pass the suite; a deliberately non-compliant renderer fails it.
 
-## Renderer contract boundary
+## Service contract boundaries
 
-- The renderer is an external service. Contract = `api/renderer.openapi.yaml`
-  (published here, OpenAPI 3.1). Any service implementing it can replace the stub.
-- The contract follows **semantic versioning**: minor bumps add backward-compatible
-  fields; major bumps are breaking. Reference adapters and third-party renderers
-  declare the major version they implement.
-- Audio: the renderer generates Veo clips with audio off by default and composes
-  Chirp narration + Lyria BGM, so spoken stock names/figures stay exact. The client
-  only sends segment intents; audio handling lives behind the contract.
+All three generation services are external HTTP services with published OpenAPI 3.1 contracts.
+Bundled stubs (template-based, no LLM) ship with the repo so the pipeline runs end-to-end
+without any private dependency.  Production deployments point the corresponding URL env var at
+a private service.
+
+| Service | Env var | Contract | Bundled stub |
+|---|---|---|---|
+| Content (script) | `CONTENT_URL` | `api/content.openapi.yaml` | `content-stub` |
+| Storyboard | `STORYBOARD_URL` | `api/storyboard.openapi.yaml` | `storyboard-stub` |
+| Renderer | `RENDERER_URL` | `api/renderer.openapi.yaml` | `renderer-stub` |
+
+All contracts follow **semantic versioning**: minor bumps add backward-compatible fields; major
+bumps are breaking.  Implementations declare the major version they implement via the
+`X-Contract-Version` response header.
+
+Renderer audio: the renderer generates Veo clips with audio off by default and composes
+Chirp narration + Lyria BGM, so spoken stock names/figures stay exact. The client
+only sends segment intents; audio handling lives behind the contract.
 
 ## Tech stack
 
