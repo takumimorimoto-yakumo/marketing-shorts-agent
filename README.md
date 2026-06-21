@@ -8,7 +8,7 @@ Built for the DevOps × AI Agent Hackathon 2026.
 
 ## What it does
 
-- Generates short-form stock commentary scripts with Gemini (channel-specific templates)
+- Generates short-form stock commentary scripts with Gemini from pluggable templates (generic examples bundled)
 - Renders videos via an external renderer service over HTTP (a stub renderer — black background + text mp4 — is bundled so the pipeline runs end-to-end)
 - Publishes to YouTube Shorts and feeds Analytics back into agentops-platform's evaluation loop
 - Enforces YMYL guards: no stock recommendations (template-level + Gemini eval detection), mandatory disclaimer captions, official primary data sources only (EDINET / J-Quants)
@@ -41,6 +41,10 @@ The renderer is **pluggable**. The agent talks to it only through the OpenAPI co
 - **Your own** — any HTTP service (e.g. Shotstack / Creatomate, or a private studio renderer) that honors the contract.
 
 The contract is intentionally domain-shaped (stock-commentary segments: hook / narration / figures / disclaimer). Only the **renderer backend** is swappable — the agent itself stays specific to one channel and format. Crucially, the safety guarantees live in the *contract*, not in any one backend: figures are rendered exactly (no generative alteration) and a request missing the mandatory disclaimer is rejected — **whichever renderer you plug in**.
+
+## Content generation
+
+Script generation is **pluggable** in the same spirit. This repo bundles **generic example templates** so the pipeline runs end-to-end and the demo is reproducible; a production deployment can swap in its own content generator via config. The agent depends on the *shape* of a script (hook / narration / figures / disclaimer segments), not on any particular template, and the YMYL guards (no recommendation phrasing, mandatory disclaimer) are enforced on the generated script **regardless of which generator produced it**.
 
 ## AI disclosure
 

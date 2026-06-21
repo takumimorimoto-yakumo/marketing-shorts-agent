@@ -30,7 +30,7 @@ agent good enough to be operated that way.
 | In | Out |
 |---|---|
 | Per-stock commentary Shorts generation + YouTube upload | Long-form video |
-| Gemini script generation (channel-specific templates) | Generic video schema / abstraction layers |
+| Script generation behind a pluggable interface (generic example templates bundled) | Production-tuned content generator (private; swapped in via config) / generic video schema / abstraction layers |
 | Pull YouTube Analytics → push to agentops-platform `/metrics` | A self-improvement loop of its own (lives in the platform) |
 | YMYL guards (no-recommendation, disclaimer, primary data) | Multi-agent orchestration |
 | Bundled renderer-stub (black background + text mp4) for E2E | The real renderer (external private HTTP service) |
@@ -39,7 +39,7 @@ agent good enough to be operated that way.
 
 ```
 pipeline orchestrator (ADK on Cloud Run)
-  ├ content        (Gemini script generation, channel templates)
+  ├ content        (pluggable; generic example templates bundled, production generator private)
   ├ renderer client ──HTTP──> external renderer service (contract: api/renderer.openapi.yaml)
   │                            (renderer-stub bundled here for local/E2E)
   ├ publisher      (YouTube Shorts upload + AI disclosure)
@@ -49,9 +49,11 @@ pipeline orchestrator (ADK on Cloud Run)
 
 ## Milestones (ordered; each has an acceptance test)
 
-- **M1 — Script generation.** Gemini + channel templates produce a structured script
-  (hook / figures / commentary / disclaimer). *Accept:* a script object that always
-  contains a disclaimer segment and passes the no-recommendation check.
+- **M1 — Script generation.** A pluggable content generator turns a stock into a
+  structured script (hook / figures / commentary / disclaimer). This repo bundles
+  generic example templates; a production generator is swapped in via config.
+  *Accept:* for any generator, a script object that always contains a disclaimer
+  segment and passes the no-recommendation check.
 - **M2 — Renderer client + stub E2E.** Call the renderer contract; bundled stub
   returns a black+text mp4. *Accept:* script → mp4 end to end with the stub; a
   request missing the disclaimer segment is rejected.

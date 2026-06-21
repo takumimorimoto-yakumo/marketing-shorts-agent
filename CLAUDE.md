@@ -15,7 +15,7 @@ Marketing video agent for メイガラシリタイ — generates and publishes J
 |---|---|
 | 個別銘柄解説 shorts の量産 + YouTube Shorts 投稿 | 長尺動画 |
 | Analytics → eval → 改善 PR ループ（agentops-platform と連動） | 独立した自己改善ループ実装 |
-| メイガラシリタイ 専用台本テンプレ・サムネテンプレ | 汎用動画スキーマ・抽象化レイヤ |
+| 汎用サンプルの台本・サムネテンプレ（pluggable インターフェース） | 本番チューニング済みの台本生成エージェント（private・config 差し替え）／汎用動画スキーマ・抽象化レイヤ |
 | YMYL 免責 / 銘柄推奨禁止ガード | エージェント協調設計 |
 | renderer-stub（黒背景 + テキストの mp4） | レンダラ本体（外部 HTTP サービス） |
 
