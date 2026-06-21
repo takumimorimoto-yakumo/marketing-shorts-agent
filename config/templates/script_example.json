@@ -1,0 +1,12 @@
+{
+  "_comment": "Generic example script template — replace fields at runtime.",
+  "ticker": "{{ticker}}",
+  "title": "{{company_name}} を{{duration_sec}}秒で解説！",
+  "sections": {
+    "hook": "{{company_name}}（{{ticker}}）、今話題の理由とは？",
+    "intro": "{{company_name}}は{{sector}}セクターの企業です。今回は最新の業績データをもとに解説します。",
+    "figures_intro": "直近の主要指標を見てみましょう。",
+    "commentary": "以上のデータをもとに、{{company_name}}の現状をお伝えしました。",
+    "disclaimer": "【免責事項】この動画は情報提供のみを目的としており、特定の銘柄への投資を推奨するものではありません。投資は自己責任でご判断ください。"
+  }
+}

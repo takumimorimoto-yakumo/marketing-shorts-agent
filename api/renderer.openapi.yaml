@@ -1,21 +1,44 @@
 openapi: 3.1.0
 info:
   title: Renderer Service Contract
-  version: 0.1.0
+  version: 1.0.0
   description: |
     HTTP contract between marketing-shorts-agent and a renderer service
-    that turns a Japanese-stock commentary script into a vertical short video.
+    that turns a storyboard (derived from a stock-commentary script) into
+    a vertical short video.
 
-    This repository bundles `renderer-stub`, a minimal implementation of
-    this contract (black background + text mp4) so the whole pipeline runs
-    end-to-end without any private dependency. A production renderer only
-    needs to implement these two endpoints — see the project README
-    ("Bring your own renderer") for example backends.
+    ## Storyboard model
 
-    Versioning: this contract follows semantic versioning. Backward-
-    compatible additions bump the minor version; breaking changes bump the
-    major version. A renderer that implements a given major version stays
-    compatible across minor bumps.
+    The pipeline upstream produces a Script, then converts it to a
+    Storyboard before calling this API. The Storyboard is the rendering
+    unit: a sequence of Scenes, each containing one or more Shots with
+    optional visual Overlays.
+
+    ## YMYL enforcement (enforced server-side — 400 if violated)
+
+    1. **Disclaimer required**: a Storyboard MUST contain at least one Shot
+       whose `type` is `disclaimer`. A `POST /renders` request that lacks
+       any `disclaimer` shot anywhere in the scene graph is rejected with
+       HTTP 400 (code: `MISSING_DISCLAIMER`).
+    2. **Figures are immutable**: any Overlay of `kind: figure` carries
+       pre-formatted, pre-verified financial values supplied by the upstream
+       pipeline. The renderer MUST reproduce these values verbatim. Altering,
+       rounding, or omitting a figure value is a contract violation.
+
+    ## Versioning
+
+    This contract follows semantic versioning. Backward-compatible additions
+    bump the minor version; breaking changes bump the major version. A renderer
+    that implements a given major version stays compatible across minor bumps.
+    Reference adapters and third-party renderers declare the major version they
+    implement via the `X-Contract-Version` response header.
+
+    ## Bring your own renderer
+
+    This repository bundles `renderer-stub`, a minimal implementation of this
+    contract (black background + text overlay mp4) so the whole pipeline runs
+    end-to-end without any private dependency. Any HTTP service that implements
+    these two endpoints with the storyboard schema can replace the stub.
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -33,7 +56,15 @@ paths:
   /renders:
     post:
       operationId: createRender
-      summary: Request rendering of one short video
+      summary: Submit a storyboard for rendering
+      description: |
+        Accepts a Storyboard and enqueues a render job. Returns 202 immediately.
+        Poll `GET /renders/{renderId}` for completion.
+
+        **400 conditions**:
+        - No Shot with `type: disclaimer` found anywhere in the scene graph
+          → code `MISSING_DISCLAIMER`
+        - Schema validation error → code `INVALID_REQUEST`
       requestBody:
         required: true
         content:
@@ -41,12 +72,14 @@ paths:
             schema: { $ref: '#/components/schemas/RenderRequest' }
       responses:
         '202':
-          description: Render job accepted
+          description: Render job accepted; poll for status.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RenderJob' }
         '400':
-          description: Invalid script (e.g. missing mandatory disclaimer)
+          description: |
+            Request rejected. Reasons include missing disclaimer shot or
+            schema validation failure.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -62,12 +95,12 @@ paths:
       summary: Poll render job status
       responses:
         '200':
-          description: OK
+          description: Current job state.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RenderJob' }
         '404':
-          description: Unknown render id
+          description: Unknown render id.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
@@ -84,67 +117,185 @@ components:
       type: object
       required: [code, message]
       properties:
-        code: { type: string }
+        code:
+          type: string
+          description: |
+            Machine-readable error code. Known values:
+            MISSING_DISCLAIMER — no disclaimer shot in the storyboard.
+            INVALID_REQUEST    — schema validation failure.
+            NOT_FOUND          — render id unknown.
         message: { type: string }
+
+    # ─── Storyboard schema ────────────────────────────────────────────
 
     RenderRequest:
       type: object
-      required: [ticker, title, segments]
+      required: [storyboard]
       properties:
-        ticker:
-          type: string
-          description: Stock ticker code (e.g. "7203")
-        title: { type: string }
-        segments:
-          type: array
-          minItems: 1
-          description: |
-            Ordered script segments. The renderer decides visual treatment
-            per segment type; numeric segments must be rendered exactly as
-            provided (no generative alteration of figures).
-          items: { $ref: '#/components/schemas/Segment' }
+        storyboard:
+          $ref: '#/components/schemas/Storyboard'
         callbackUrl:
           type: string
-          description: Optional webhook invoked when the job finishes
+          format: uri
+          description: Optional webhook invoked when the job finishes (POST, body = RenderJob).
 
-    Segment:
+    Storyboard:
       type: object
-      required: [type, text]
+      required: [title, ticker, scenes]
+      description: |
+        Top-level rendering unit. Represents one Short video, typically derived
+        from a stock-commentary script.
+
+        Contract invariant: at least one Shot with `type: disclaimer` MUST exist
+        across all scenes. The renderer enforces this and returns 400 otherwise.
       properties:
+        title:
+          type: string
+          description: Human-readable title of the video (not rendered on-screen directly).
+        ticker:
+          type: string
+          description: |
+            Stock ticker code (e.g. "7203"). Used for logging and metadata only;
+            the renderer does not embed it unless an Overlay requests it.
+        scenes:
+          type: array
+          minItems: 1
+          description: Ordered list of scenes that make up the Short.
+          items: { $ref: '#/components/schemas/Scene' }
+
+    Scene:
+      type: object
+      required: [id, shots]
+      description: A thematic unit within the Storyboard (e.g. "intro", "figures", "close").
+      properties:
+        id:
+          type: string
+          description: Stable identifier for this scene (e.g. "intro", "body", "close").
+        durationSec:
+          type: number
+          description: |
+            Target total duration of the scene in seconds. The renderer may adjust
+            individual Shot durations within the scene to fit, but the scene total
+            should stay within ±20% of this value.
+        shots:
+          type: array
+          minItems: 1
+          description: Ordered list of shots within the scene.
+          items: { $ref: '#/components/schemas/Shot' }
+
+    Shot:
+      type: object
+      required: [id, type]
+      description: |
+        Atomic rendering unit. Each shot corresponds to one clip + its overlays.
+      properties:
+        id:
+          type: string
+          description: Stable identifier for this shot within its scene.
         type:
           type: string
           enum: [hook, narration, figures, disclaimer]
           description: |
-            hook       — opening attention segment (first seconds)
-            narration  — voiced commentary
-            figures    — exact financial figures to display (must not be altered)
-            disclaimer — mandatory legal disclaimer (request is rejected if absent)
-        text: { type: string }
-        figures:
-          type: array
-          description: Structured values for `figures` segments
-          items:
-            type: object
-            required: [label, value]
-            properties:
-              label: { type: string, description: e.g. "PER" }
-              value: { type: string, description: Pre-formatted exact value, e.g. "12.3x" }
+            hook        — Opening attention clip (first few seconds).
+            narration   — Voiced commentary over a clip.
+            figures     — Financial figures display. Overlays of kind `figure` on
+                          this shot MUST be reproduced verbatim (immutability rule).
+            disclaimer  — Mandatory legal disclaimer. At least one Shot of this type
+                          MUST be present in the Storyboard; absence → 400.
         durationSec:
           type: number
-          description: Target duration; renderer may adjust within ±20%
+          description: Target duration of this specific shot in seconds.
+        clip:
+          $ref: '#/components/schemas/ClipIntent'
+          description: |
+            Optional clip intent. If omitted, the renderer chooses an appropriate
+            default based on shot type.
+        overlays:
+          type: array
+          description: Visual elements layered on top of the clip.
+          items: { $ref: '#/components/schemas/Overlay' }
+
+    ClipIntent:
+      type: object
+      required: [kind]
+      description: |
+        Intent for the background clip of a shot. The renderer resolves this
+        intent to an actual video asset.
+      properties:
+        kind:
+          type: string
+          enum: [generative, stock, solid]
+          description: |
+            generative — Request a generative (e.g. Veo) video clip.
+            stock      — Use a stock footage clip; renderer may pick a matching one.
+            solid      — A plain solid-color background (useful for figures/disclaimer).
+        color:
+          type: string
+          description: |
+            Background color for `solid` kind clips. CSS hex string (e.g. "#000000").
+          example: "#000000"
+        prompt:
+          type: string
+          description: |
+            Natural-language prompt for `generative` clips. Should not contain
+            financial figures or stock-recommendation language (YMYL).
+        query:
+          type: string
+          description: Search query for `stock` clips.
+
+    Overlay:
+      type: object
+      required: [kind]
+      description: |
+        Visual element placed on top of a clip. Overlays of kind `figure` are
+        IMMUTABLE: the renderer MUST display the exact `value` string provided.
+        Do not round, abbreviate, or translate figure values.
+      properties:
+        kind:
+          type: string
+          enum: [text, figure]
+          description: |
+            text   — Free-form text overlay (narration caption, title card, etc.).
+            figure — Pre-verified financial figure. Value MUST be reproduced verbatim.
+        text:
+          type: string
+          description: Display text for `text` overlays.
+        label:
+          type: string
+          description: Label for `figure` overlays (e.g. "PER", "売上高").
+        value:
+          type: string
+          description: |
+            Pre-formatted, pre-verified financial value for `figure` overlays
+            (e.g. "12.3x", "¥1,234億"). The renderer MUST NOT alter this value.
+
+    # ─── Job schema ───────────────────────────────────────────────────
 
     RenderJob:
       type: object
       required: [renderId, state]
+      description: Represents the current state of a render job.
       properties:
-        renderId: { type: string }
+        renderId:
+          type: string
+          description: Unique identifier for this render job.
         state:
           type: string
           enum: [queued, rendering, done, failed]
         videoUrl:
           type: string
-          description: Signed URL of the finished mp4 (9:16 vertical)
-        durationSec: { type: number }
-        error: { type: string }
-        createdAt: { type: string, format: date-time }
-        finishedAt: { type: string, format: date-time }
+          format: uri
+          description: Signed URL of the finished mp4 (9:16 vertical, ≤60 s). Present when state=done.
+        durationSec:
+          type: number
+          description: Actual duration of the rendered video in seconds. Present when state=done.
+        error:
+          type: string
+          description: Human-readable error message. Present when state=failed.
+        createdAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+          description: Present when state=done or state=failed.
