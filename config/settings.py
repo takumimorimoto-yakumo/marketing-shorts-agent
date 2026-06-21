@@ -22,10 +22,22 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    # ── Content service ──────────────────────────────────────────────────────
+    content_url: str = Field(
+        default="",
+        description="Base URL of the content service. Empty → use bundled content-stub.",
+    )
+
+    # ── Storyboard service ───────────────────────────────────────────────────
+    storyboard_url: str = Field(
+        default="",
+        description="Base URL of the storyboard service. Empty → use bundled storyboard-stub.",
+    )
+
     # ── Renderer ────────────────────────────────────────────────────────────
     renderer_url: str = Field(
         default="",
-        description="Base URL of the renderer service. Empty → use bundled stub.",
+        description="Base URL of the renderer service. Empty → use bundled renderer-stub.",
     )
 
     # ── Google Cloud ─────────────────────────────────────────────────────────

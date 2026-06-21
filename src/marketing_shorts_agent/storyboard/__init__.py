@@ -2,5 +2,11 @@
 
 from .interface import StoryboardGeneratorInterface
 from .example import ExampleStoryboardGenerator
+from .client import StoryboardClientError, StoryboardServiceClient
 
-__all__ = ["StoryboardGeneratorInterface", "ExampleStoryboardGenerator"]
+__all__ = [
+    "StoryboardGeneratorInterface",
+    "ExampleStoryboardGenerator",
+    "StoryboardClientError",
+    "StoryboardServiceClient",
+]
