@@ -15,6 +15,24 @@ Built for the DevOps × AI Agent Hackathon 2026.
 
 This repository is intentionally **specific to メイガラシリタイ**: one channel, one format, short-form only.
 
+## Relationship to agentops-platform
+
+This is a **managed agent**: it does the real task (making Shorts) and is *operated* by [agentops-platform](https://github.com/takumimorimoto-yakumo/agentops-platform). The platform does not use this agent's videos — it governs this agent's *behavior* (evaluate → canary → auto-rollback).
+
+```
+   agentops-platform        (control plane + autonomous meta-agent)
+        │  ▲
+   (1)  │  │  (2)
+ operate │  │ report
+  / eval ▼  │
+   marketing-shorts-agent   (this repo — does the real task)
+        │
+        ▼  the Shorts go to YouTube / viewers — the platform never consumes them
+```
+
+- **(1) platform → this agent**: evaluates each script/prompt version, rolls it out by canary, and auto-rolls-back on regression.
+- **(2) this agent → platform**: registers its versions and pushes outcome metrics (audience retention / ROAS).
+
 ## Architecture
 
 ```
