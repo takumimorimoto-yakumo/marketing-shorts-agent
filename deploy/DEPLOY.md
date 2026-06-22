@@ -125,9 +125,9 @@ RENDERER_URL=https://<private-renderer-service-url> \
 | `RENDERER_URL` | yes | — | URL of the renderer service (stub or private) |
 | `AGENTOPS_BASE_URL` | yes | — | Base URL of the agentops-platform service |
 | `AGENTOPS_AGENT_ID` | no | `marketing-shorts-agent` | Agent id registered with the platform |
-| `GEMINI_SCRIPT_MODEL` | no | `gemini-2.0-flash-001` | Gemini model for script generation |
-| `GEMINI_STORYBOARD_MODEL` | no | `gemini-2.0-flash-001` | Gemini model for storyboard generation |
-| `GEMINI_EVAL_MODEL` | no | `gemini-2.0-flash-001` | Gemini model for YMYL evaluation |
+| `GEMINI_SCRIPT_MODEL` | no | `gemini-2.5-flash` | Gemini model for script generation |
+| `GEMINI_STORYBOARD_MODEL` | no | `gemini-2.5-flash` | Gemini model for storyboard generation |
+| `GEMINI_EVAL_MODEL` | no | `gemini-2.5-flash` | Gemini model for YMYL evaluation |
 | `VEO_MODEL` | no | `veo-3.0-generate-preview` | Veo model id |
 | `IMAGEN_MODEL` | no | `imagen-3.0-generate-001` | Imagen model id |
 | `CHIRP_VOICE` | no | `ja-JP-Standard-D` | Chirp voice id |

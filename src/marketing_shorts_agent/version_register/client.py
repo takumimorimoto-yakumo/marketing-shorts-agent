@@ -115,7 +115,7 @@ class AgentOpsVersionRegisterClient(VersionRegisterInterface):
         """POST /agents/{agentId}/versions — create version."""
         payload: dict[str, str] = {
             "image": record.metadata.get("image", "gcr.io/unknown/unknown:latest"),
-            "model": record.metadata.get("model", "gemini-2.0-flash-001"),
+            "model": record.metadata.get("model", "gemini-2.5-flash"),
             "promptDigest": hashlib.sha256(
                 record.content_generator_class.encode()
             ).hexdigest()[:16],

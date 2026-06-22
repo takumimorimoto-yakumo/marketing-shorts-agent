@@ -58,11 +58,11 @@ spec:
               value: "marketing-shorts-agent"
             # Gemini model ids
             - name: GEMINI_SCRIPT_MODEL
-              value: "gemini-2.0-flash-001"
+              value: "gemini-2.5-flash"
             - name: GEMINI_STORYBOARD_MODEL
-              value: "gemini-2.0-flash-001"
+              value: "gemini-2.5-flash"
             - name: GEMINI_EVAL_MODEL
-              value: "gemini-2.0-flash-001"
+              value: "gemini-2.5-flash"
 
           # ── Secrets from Secret Manager ──────────────────────────────────
           # The service account must have roles/secretmanager.secretAccessor.

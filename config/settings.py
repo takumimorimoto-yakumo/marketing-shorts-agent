@@ -45,9 +45,9 @@ class Settings(BaseSettings):
     google_cloud_region: str = Field(default="us-central1")
 
     # ── Model IDs ────────────────────────────────────────────────────────────
-    gemini_script_model: str = Field(default="gemini-2.0-flash-001")
-    gemini_storyboard_model: str = Field(default="gemini-2.0-flash-001")
-    gemini_eval_model: str = Field(default="gemini-2.0-flash-001")
+    gemini_script_model: str = Field(default="gemini-2.5-flash")
+    gemini_storyboard_model: str = Field(default="gemini-2.5-flash")
+    gemini_eval_model: str = Field(default="gemini-2.5-flash")
     veo_model: str = Field(default="veo-3.0-generate-preview")
     imagen_model: str = Field(default="imagen-3.0-generate-001")
     chirp_voice: str = Field(default="ja-JP-Standard-D")
