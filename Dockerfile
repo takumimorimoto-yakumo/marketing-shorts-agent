@@ -9,7 +9,7 @@ WORKDIR /build
 RUN pip install --no-cache-dir hatchling
 
 # Copy project metadata first for layer caching
-COPY pyproject.toml ./
+COPY pyproject.toml README.md ./
 COPY src/ ./src/
 COPY config/ ./config/
 
@@ -31,8 +31,10 @@ RUN pip install --no-cache-dir /tmp/wheels/*.whl && rm -rf /tmp/wheels
 # Copy config templates
 COPY config/templates/ /app/config/templates/
 
-# Copy renderer-stub (needed when RENDERER_URL is not set)
+# Copy bundled stubs (needed when RENDERER_URL / CONTENT_URL / STORYBOARD_URL are not set)
 COPY renderer_stub/ /app/renderer_stub/
+COPY content_stub/ /app/content_stub/
+COPY storyboard_stub/ /app/storyboard_stub/
 RUN pip install --no-cache-dir fastapi uvicorn[standard]
 
 # Switch to non-root
