@@ -48,6 +48,8 @@ class AgentOpsVersionRegisterClient(VersionRegisterInterface):
             headers=headers,
             timeout=_REQUEST_TIMEOUT,
         )
+        # In-process cache: avoid repeated GET /agents calls within the same process lifetime.
+        self._cached_agent_id: str | None = None
 
     # ── Public ──────────────────────────────────────────────────────────────
 
@@ -84,32 +86,56 @@ class AgentOpsVersionRegisterClient(VersionRegisterInterface):
     # ── Private ─────────────────────────────────────────────────────────────
 
     def _ensure_agent(self, agent_name: str) -> str:
-        """POST /agents — register agent (idempotent).
+        """Return the platform agentId for *agent_name*, creating it if necessary.
 
-        The platform may return 409 if the agent already exists; we handle that
-        by re-listing agents and finding the matching name.
-        Returns the platform agentId.
+        Strategy (GET-first):
+          1. Return cached agentId immediately if available (in-process cache).
+          2. GET /agents — search for an existing agent with a matching name.
+          3. If found, store in cache and return its agentId (no POST issued).
+          4. If not found, POST /agents to create the agent, cache and return the new agentId.
+
+        This avoids duplicate agent creation when the platform does not return 409
+        for duplicate names (i.e. always creates a new agent on POST).
         """
+        if self._cached_agent_id is not None:
+            logger.debug(
+                "Reusing cached agentId",
+                extra={"agent_name": agent_name, "agent_id": self._cached_agent_id},
+            )
+            return self._cached_agent_id
+
+        # Search for existing agent before attempting creation.
+        existing_id = self._find_agent_id_or_none(agent_name)
+        if existing_id is not None:
+            logger.info(
+                "Found existing agent on platform — reusing",
+                extra={"agent_name": agent_name, "agent_id": existing_id},
+            )
+            self._cached_agent_id = existing_id
+            return existing_id
+
+        # Agent does not exist yet — create it.
         resp = self._http.post(
             "/agents",
             json={"name": agent_name, "runtime": _RUNTIME},
         )
-        if resp.status_code == 201:
-            return resp.json()["agentId"]
-        if resp.status_code in (409, 422):
-            # Agent already registered — find its id
-            return self._find_agent_id(agent_name)
         resp.raise_for_status()
-        return resp.json()["agentId"]  # unreachable, satisfies type checker
+        new_id: str = resp.json()["agentId"]
+        logger.info(
+            "Created new agent on platform",
+            extra={"agent_name": agent_name, "agent_id": new_id},
+        )
+        self._cached_agent_id = new_id
+        return new_id
 
-    def _find_agent_id(self, agent_name: str) -> str:
-        """GET /agents — find agent by name."""
+    def _find_agent_id_or_none(self, agent_name: str) -> str | None:
+        """GET /agents — return the agentId for *agent_name*, or None if not found."""
         resp = self._http.get("/agents")
         resp.raise_for_status()
         for agent in resp.json():
             if agent.get("name") == agent_name:
                 return agent["agentId"]
-        raise RuntimeError(f"Agent '{agent_name}' not found after registration conflict")
+        return None
 
     def _create_version(self, agent_id: str, record: VersionRecord) -> str:
         """POST /agents/{agentId}/versions — create version."""

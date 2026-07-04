@@ -105,19 +105,27 @@ class TestVersionRegisterClientDryRun:
 class TestVersionRegisterClientLive:
     """dry_run=False issues real HTTP (mocked with pytest-httpx)."""
 
-    def test_register_posts_to_agents_then_versions(
+    def test_register_no_existing_agent_issues_get_then_post(
         self,
         httpx_mock: HTTPXMock,
         version_record: VersionRecord,
     ):
-        # Mock POST /agents → 201
+        """When GET /agents returns an empty list, POST /agents is called to create the agent."""
+        # GET /agents → empty list (agent does not exist yet)
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[],
+        )
+        # POST /agents → 201 (create)
         httpx_mock.add_response(
             method="POST",
             url=f"{_BASE_URL}/agents",
             status_code=201,
             json={"agentId": "plat-agent-001", "name": "marketing-shorts-agent", "runtime": "adk-cloud-run", "createdAt": "2026-01-01T00:00:00Z"},
         )
-        # Mock POST /agents/plat-agent-001/versions → 201
+        # POST /agents/plat-agent-001/versions → 201
         httpx_mock.add_response(
             method="POST",
             url=f"{_BASE_URL}/agents/plat-agent-001/versions",
@@ -129,19 +137,20 @@ class TestVersionRegisterClientLive:
         result = client.register(version_record)
         assert result == "v-xyz123"
 
-    def test_register_handles_409_conflict_on_agent(
+        requests = httpx_mock.get_requests()
+        # First request must be GET /agents (search before create)
+        assert requests[0].method == "GET"
+        assert str(requests[0].url).endswith("/agents")
+        # Second request must be POST /agents (create)
+        assert requests[1].method == "POST"
+        assert str(requests[1].url).endswith("/agents")
+
+    def test_register_existing_agent_skips_post(
         self,
         httpx_mock: HTTPXMock,
         version_record: VersionRecord,
     ):
-        """When POST /agents returns 409, client falls back to GET /agents to find agentId."""
-        # POST /agents → 409 (already exists)
-        httpx_mock.add_response(
-            method="POST",
-            url=f"{_BASE_URL}/agents",
-            status_code=409,
-            json={"code": "CONFLICT", "message": "already exists"},
-        )
+        """When GET /agents returns a matching agent, POST /agents must NOT be called."""
         # GET /agents → list containing the agent
         httpx_mock.add_response(
             method="GET",
@@ -161,12 +170,74 @@ class TestVersionRegisterClientLive:
         result = client.register(version_record)
         assert result == "v-existing-001"
 
+        requests = httpx_mock.get_requests()
+        # Only 2 requests: GET /agents + POST /agents/{id}/versions (no POST /agents)
+        assert len(requests) == 2
+        assert requests[0].method == "GET"
+        assert str(requests[0].url).endswith("/agents")
+        assert requests[1].method == "POST"
+        assert "existing-agent-id" in str(requests[1].url)
+
+    def test_register_uses_cache_on_second_call(
+        self,
+        httpx_mock: HTTPXMock,
+        version_record: VersionRecord,
+    ):
+        """Second call to register() reuses the cached agentId — no GET issued again."""
+        # GET /agents → empty list (first call only)
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[],
+        )
+        # POST /agents → 201 (first call only)
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents",
+            status_code=201,
+            json={"agentId": "cached-agent-id", "name": "marketing-shorts-agent", "runtime": "adk-cloud-run", "createdAt": "2026-01-01T00:00:00Z"},
+        )
+        # POST versions for first call
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/cached-agent-id/versions",
+            status_code=201,
+            json={"versionId": "v-first", "createdAt": "2026-01-01T00:00:00Z"},
+        )
+        # POST versions for second call (no GET or POST /agents needed)
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/cached-agent-id/versions",
+            status_code=201,
+            json={"versionId": "v-second", "createdAt": "2026-01-01T00:00:00Z"},
+        )
+
+        client = AgentOpsVersionRegisterClient(base_url=_BASE_URL, dry_run=False)
+        r1 = client.register(version_record)
+        r2 = client.register(version_record)
+        assert r1 == "v-first"
+        assert r2 == "v-second"
+
+        requests = httpx_mock.get_requests()
+        # GET /agents: 1 time, POST /agents: 1 time, POST versions: 2 times
+        get_agents = [r for r in requests if r.method == "GET" and str(r.url).endswith("/agents")]
+        post_agents = [r for r in requests if r.method == "POST" and str(r.url).endswith("/agents")]
+        assert len(get_agents) == 1, "GET /agents must be issued only once (cache used on 2nd call)"
+        assert len(post_agents) == 1, "POST /agents must be issued only once"
+
     def test_register_builds_correct_payload(
         self,
         httpx_mock: HTTPXMock,
         version_record: VersionRecord,
     ):
         """The version payload must include image, model, and promptDigest."""
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[],
+        )
         httpx_mock.add_response(
             method="POST",
             url=f"{_BASE_URL}/agents",
@@ -183,9 +254,9 @@ class TestVersionRegisterClientLive:
         client = AgentOpsVersionRegisterClient(base_url=_BASE_URL, dry_run=False)
         client.register(version_record)
 
-        # Inspect the second request (POST /versions)
+        # Inspect the last request (POST /versions)
         requests = httpx_mock.get_requests()
-        version_req = requests[1]
+        version_req = requests[-1]
         import json
         body = json.loads(version_req.content)
         assert "image" in body

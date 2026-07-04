@@ -108,7 +108,14 @@ class TestVersionRegisterPayload:
     """Version register client sends correct payload to agentops-platform."""
 
     def test_register_posts_to_agents_endpoint(self, httpx_mock: HTTPXMock) -> None:
-        """POST /v1/agents must be called first with name and runtime fields."""
+        """GET /v1/agents is called first; when no match, POST /v1/agents creates the agent."""
+        # GET /agents → empty list (agent not yet registered)
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_AGENTOPS_URL}/v1/agents",
+            status_code=200,
+            json=[],
+        )
         httpx_mock.add_response(
             method="POST",
             url=f"{_AGENTOPS_URL}/v1/agents",
@@ -144,13 +151,22 @@ class TestVersionRegisterPayload:
 
         assert result == "v-live-001"
         requests = httpx_mock.get_requests()
-        # First request: POST /agents
-        agent_req_body = json.loads(requests[0].content)
+        # First request: GET /agents (search before create)
+        assert requests[0].method == "GET"
+        # Second request: POST /agents (create — name and runtime must be set)
+        agent_req_body = json.loads(requests[1].content)
         assert agent_req_body["name"] == "marketing-shorts-agent"
         assert agent_req_body["runtime"] == "adk-cloud-run"
 
     def test_version_payload_contains_required_fields(self, httpx_mock: HTTPXMock) -> None:
         """POST /agents/{id}/versions body must include image, model, and promptDigest."""
+        # GET /agents → empty list (agent not yet registered)
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_AGENTOPS_URL}/v1/agents",
+            status_code=200,
+            json=[],
+        )
         httpx_mock.add_response(
             method="POST",
             url=f"{_AGENTOPS_URL}/v1/agents",
@@ -184,7 +200,8 @@ class TestVersionRegisterPayload:
             )
         )
 
-        version_body = json.loads(httpx_mock.get_requests()[1].content)
+        # Last request is POST /versions (index -1 regardless of GET/POST ordering)
+        version_body = json.loads(httpx_mock.get_requests()[-1].content)
         assert "image" in version_body, "version payload must contain 'image'"
         assert "model" in version_body, "version payload must contain 'model'"
         assert "promptDigest" in version_body, "version payload must contain 'promptDigest'"
