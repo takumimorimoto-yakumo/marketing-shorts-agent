@@ -278,15 +278,21 @@ class PipelineOrchestrator:
 
         # 8. Version register — must run before analytics so the real versionId
         #    is available to embed in MetricIngest.versionId (avoids agent_id fallback).
-        version_id = self._version_register.register(
-            VersionRecord(
-                agent_id=self._config.agent_id,
-                version=self._config.agent_version,
-                content_generator_class=type(self._content).__qualname__,
-                metadata={"ticker": stock_info.ticker, "video_id": publish_result.video_id},
+        #    Failures are non-fatal: agentops is an observability side-channel and must
+        #    not block the primary pipeline result.
+        version_id = ""
+        try:
+            version_id = self._version_register.register(
+                VersionRecord(
+                    agent_id=self._config.agent_id,
+                    version=self._config.agent_version,
+                    content_generator_class=type(self._content).__qualname__,
+                    metadata={"ticker": stock_info.ticker, "video_id": publish_result.video_id},
+                )
             )
-        )
-        logger.info("Version registered", extra={"version_id": version_id})
+            logger.info("Version registered", extra={"version_id": version_id})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Version register step failed (non-fatal): %s", exc)
 
         # 9. Analytics (best-effort — don't fail the pipeline).
         #    Pass version_id via metrics.extra so _build_payload can embed the

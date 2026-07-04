@@ -139,16 +139,40 @@ def _build_orchestrator() -> PipelineOrchestrator:
         logger.info("Bundled renderer-stub started", extra={"url": renderer_url})
 
     agentops_base_url: str = os.environ.get("AGENTOPS_BASE_URL", "").strip()
+    agentops_agent_id: str = os.environ.get("AGENTOPS_AGENT_ID", "marketing-shorts-agent").strip()
+    agentops_api_key: str = os.environ.get("AGENTOPS_API_KEY", "").strip()
+
+    version_register = None
+    analytics = None
+
     if agentops_base_url:
-        # AGENTOPS_BASE_URL is set; log it but continue using stub implementations.
-        # Production wiring (AgentOpsVersionRegisterClient, AgentOpsAnalyticsClient, etc.)
-        # requires additional credentials (bearer_token, suite_id) that are out of scope
-        # for the bundled surface.  The stub implementations already skip network calls
-        # when no live credentials are present, which matches the intended behaviour.
+        from .analytics.client import AgentOpsAnalyticsClient  # noqa: PLC0415
+        from .version_register.client import AgentOpsVersionRegisterClient  # noqa: PLC0415
+
+        bearer_token: str | None = agentops_api_key if agentops_api_key else None
+
+        version_register = AgentOpsVersionRegisterClient(
+            base_url=agentops_base_url,
+            bearer_token=bearer_token,
+            dry_run=False,
+        )
+        analytics = AgentOpsAnalyticsClient(
+            base_url=agentops_base_url,
+            bearer_token=bearer_token,
+            dry_run=False,
+        )
         logger.info(
-            "AGENTOPS_BASE_URL is configured; stub implementations remain active for "
-            "evaluator / analytics / version-register until production credentials are wired.",
-            extra={"agentops_base_url": agentops_base_url},
+            "AgentOps live clients configured",
+            extra={
+                "agentops_base_url": agentops_base_url,
+                "agent_id": agentops_agent_id,
+                "auth": "bearer" if bearer_token else "none",
+            },
+        )
+    else:
+        logger.info(
+            "AGENTOPS_BASE_URL not set; stub implementations used for "
+            "version-register and analytics"
         )
 
     config = PipelineConfig(
@@ -156,6 +180,9 @@ def _build_orchestrator() -> PipelineOrchestrator:
         content_url=content_url,
         storyboard_url=storyboard_url,
         dry_run=dry_run,
+        agent_id=agentops_agent_id,
+        version_register=version_register,
+        analytics=analytics,
     )
     logger.info(
         "Building PipelineOrchestrator",
