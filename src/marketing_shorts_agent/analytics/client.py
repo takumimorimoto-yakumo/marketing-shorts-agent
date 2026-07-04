@@ -8,6 +8,15 @@ integration is out of scope for the bundled public surface).
 
 When AGENTOPS_DRY_RUN=true (default) or when the base URL is empty, the push
 call is skipped and only logged.
+
+Agent UUID resolution
+---------------------
+The platform's /metrics endpoint requires a UUID agentId, not the agent name.
+This client uses AgentResolver (shared with the version register client) to
+resolve the name to a UUID before each push, with in-process caching.
+
+Stale-cache recovery: if push() returns 404 (platform restarted), the cache
+is invalidated, the agent is re-resolved, and the push is retried once.
 """
 
 from __future__ import annotations
@@ -17,6 +26,7 @@ from datetime import datetime, timezone
 
 import httpx
 
+from ..agentops.agent_resolver import AgentResolver
 from .interface import AnalyticsInterface, VideoMetrics
 
 logger = logging.getLogger(__name__)
@@ -50,6 +60,8 @@ class AgentOpsAnalyticsClient(AnalyticsInterface):
             headers=headers,
             timeout=_REQUEST_TIMEOUT,
         )
+        # AgentResolver is keyed by agent_name; created lazily on first push().
+        self._resolver: AgentResolver | None = None
 
     # ── Public ──────────────────────────────────────────────────────────────
 
@@ -75,26 +87,42 @@ class AgentOpsAnalyticsClient(AnalyticsInterface):
     def push(self, metrics: VideoMetrics, agent_id: str) -> None:
         """POST /agents/{agentId}/metrics with retention and view metrics.
 
+        ``agent_id`` is the *agent name* (e.g. ``"marketing-shorts-agent"``).
+        The method resolves it to the platform UUID before issuing the request.
+
         In dry-run mode this is a no-op (only logged).
         """
-        payload = self._build_payload(metrics, agent_id)
-
         if self._dry_run or not self._base_url:
             logger.info(
                 "[DRY-RUN] Skipping agentops-platform metrics push",
                 extra={
                     "agent_id": agent_id,
                     "video_id": metrics.video_id,
-                    "samples": len(payload["samples"]),
                 },
             )
             return
 
-        resp = self._http.post(f"/agents/{agent_id}/metrics", json=payload)
-        resp.raise_for_status()
+        resolver = self._get_resolver(agent_id)
+        uuid = resolver.ensure()
+        payload = self._build_payload(metrics, agent_id)
+
+        try:
+            self._post_metrics(uuid, payload)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+
+            logger.warning(
+                "metrics POST returned 404 — stale agentId detected, re-resolving agent",
+                extra={"stale_uuid": uuid, "agent_name": agent_id},
+            )
+            resolver.invalidate()
+            new_uuid = resolver.ensure()
+            self._post_metrics(new_uuid, payload)
+
         logger.info(
             "Pushed metrics to agentops-platform",
-            extra={"agent_id": agent_id, "video_id": metrics.video_id, "status": resp.status_code},
+            extra={"agent_id": uuid, "video_id": metrics.video_id},
         )
 
     def close(self) -> None:
@@ -107,6 +135,17 @@ class AgentOpsAnalyticsClient(AnalyticsInterface):
         self.close()
 
     # ── Private ─────────────────────────────────────────────────────────────
+
+    def _get_resolver(self, agent_name: str) -> AgentResolver:
+        """Return (and lazily create) the AgentResolver for this client."""
+        if self._resolver is None:
+            self._resolver = AgentResolver(self._http, agent_name)
+        return self._resolver
+
+    def _post_metrics(self, agent_uuid: str, payload: dict) -> None:
+        """POST /agents/{agentId}/metrics — raise on HTTP error."""
+        resp = self._http.post(f"/agents/{agent_uuid}/metrics", json=payload)
+        resp.raise_for_status()
 
     @staticmethod
     def _build_payload(metrics: VideoMetrics, agent_id: str) -> dict:

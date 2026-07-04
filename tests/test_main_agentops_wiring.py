@@ -213,14 +213,33 @@ class TestVersionRegisterPayload:
 # ── Payload shape: analytics ──────────────────────────────────────────────────
 
 
+_WIRING_AGENT_NAME = "marketing-shorts-agent"
+_WIRING_AGENT_UUID = "plat-wiring-uuid-001"
+
+
+def _mock_agent_list_wiring(httpx_mock: HTTPXMock) -> None:
+    """Register a GET /v1/agents mock that returns the wiring-test agent."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_AGENTOPS_URL}/v1/agents",
+        status_code=200,
+        json=[{"agentId": _WIRING_AGENT_UUID, "name": _WIRING_AGENT_NAME, "runtime": "adk-cloud-run"}],
+    )
+
+
 class TestAnalyticsPayload:
-    """Analytics client sends correct MetricIngest payload to agentops-platform."""
+    """Analytics client sends correct MetricIngest payload to agentops-platform.
+
+    The client resolves the agent name to a UUID (GET /v1/agents) before
+    posting to /v1/agents/{uuid}/metrics.
+    """
 
     def test_push_hits_correct_endpoint(self, httpx_mock: HTTPXMock) -> None:
-        """POST /v1/agents/{agentId}/metrics must be called."""
+        """GET /v1/agents resolves name to UUID; POST /v1/agents/{uuid}/metrics is called."""
+        _mock_agent_list_wiring(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_AGENTOPS_URL}/v1/agents/marketing-shorts-agent/metrics",
+            url=f"{_AGENTOPS_URL}/v1/agents/{_WIRING_AGENT_UUID}/metrics",
             status_code=202,
         )
 
@@ -236,16 +255,23 @@ class TestAnalyticsPayload:
                 likes=10,
                 extra={"version_id": "v-live-001"},
             ),
-            "marketing-shorts-agent",
+            _WIRING_AGENT_NAME,
         )
 
-        assert len(httpx_mock.get_requests()) == 1
+        requests = httpx_mock.get_requests()
+        # 2 requests: GET /agents + POST /metrics
+        assert len(requests) == 2
+        assert requests[0].method == "GET"
+        assert str(requests[0].url).endswith("/agents")
+        assert requests[1].method == "POST"
+        assert _WIRING_AGENT_UUID in str(requests[1].url)
 
     def test_push_payload_schema(self, httpx_mock: HTTPXMock) -> None:
         """MetricIngest payload must have versionId, source='youtube-analytics', and samples."""
+        _mock_agent_list_wiring(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_AGENTOPS_URL}/v1/agents/marketing-shorts-agent/metrics",
+            url=f"{_AGENTOPS_URL}/v1/agents/{_WIRING_AGENT_UUID}/metrics",
             status_code=202,
         )
 
@@ -260,9 +286,9 @@ class TestAnalyticsPayload:
             likes=30,
             extra={"version_id": "v-live-xyz"},
         )
-        client.push(metrics, "marketing-shorts-agent")
+        client.push(metrics, _WIRING_AGENT_NAME)
 
-        body = json.loads(httpx_mock.get_requests()[0].content)
+        body = json.loads(httpx_mock.get_requests()[-1].content)
         assert body["versionId"] == "v-live-xyz", (
             "versionId must be taken from metrics.extra['version_id']"
         )

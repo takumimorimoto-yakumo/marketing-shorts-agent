@@ -24,6 +24,18 @@ from marketing_shorts_agent.version_register.client import AgentOpsVersionRegist
 from marketing_shorts_agent.version_register.interface import VersionRecord
 
 _BASE_URL = "https://agentops-test.run.app/v1"
+_AGENT_NAME = "marketing-shorts-agent"
+_AGENT_UUID = "plat-agent-uuid-001"
+
+
+def _mock_agent_list(httpx_mock: HTTPXMock, uuid: str = _AGENT_UUID) -> None:
+    """Register a GET /agents mock that returns a list containing the test agent."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{_BASE_URL}/agents",
+        status_code=200,
+        json=[{"agentId": uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+    )
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -286,21 +298,37 @@ class TestAnalyticsClientDryRun:
 
 
 class TestAnalyticsClientLive:
-    """dry_run=False issues real HTTP (mocked)."""
+    """dry_run=False issues real HTTP (mocked).
 
-    def test_push_posts_to_metrics_endpoint(
+    The client now resolves the agent name to a UUID (GET /agents) before
+    posting to /agents/{uuid}/metrics.  All tests in this class must mock
+    the GET /agents call first.
+    """
+
+    def test_push_posts_to_uuid_metrics_endpoint(
         self,
         httpx_mock: HTTPXMock,
         sample_metrics: VideoMetrics,
     ):
+        """push() must resolve the UUID via GET /agents and use it in the path."""
+        _mock_agent_list(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            url=f"{_BASE_URL}/agents/{_AGENT_UUID}/metrics",
             status_code=202,
         )
 
         client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
-        client.push(sample_metrics, "marketing-shorts-agent")  # must not raise
+        client.push(sample_metrics, _AGENT_NAME)  # must not raise
+
+        requests = httpx_mock.get_requests()
+        assert requests[0].method == "GET"
+        assert str(requests[0].url).endswith("/agents")
+        assert requests[1].method == "POST"
+        assert _AGENT_UUID in str(requests[1].url)
+        assert _AGENT_NAME not in str(requests[1].url), (
+            "The metrics path must use the UUID, not the agent name"
+        )
 
     def test_push_payload_contains_required_fields(
         self,
@@ -308,17 +336,18 @@ class TestAnalyticsClientLive:
         sample_metrics: VideoMetrics,
     ):
         """MetricIngest payload must have versionId, source, and samples."""
+        _mock_agent_list(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            url=f"{_BASE_URL}/agents/{_AGENT_UUID}/metrics",
             status_code=202,
         )
 
         client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
-        client.push(sample_metrics, "marketing-shorts-agent")
+        client.push(sample_metrics, _AGENT_NAME)
 
         import json
-        req = httpx_mock.get_requests()[0]
+        req = httpx_mock.get_requests()[-1]  # last request is the POST /metrics
         body = json.loads(req.content)
         assert "versionId" in body
         assert body["source"] == "youtube-analytics"
@@ -331,17 +360,18 @@ class TestAnalyticsClientLive:
         sample_metrics: VideoMetrics,
     ):
         """Payload must include retention_rate, views, average_view_duration_sec, likes."""
+        _mock_agent_list(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            url=f"{_BASE_URL}/agents/{_AGENT_UUID}/metrics",
             status_code=202,
         )
 
         client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
-        client.push(sample_metrics, "marketing-shorts-agent")
+        client.push(sample_metrics, _AGENT_NAME)
 
         import json
-        req = httpx_mock.get_requests()[0]
+        req = httpx_mock.get_requests()[-1]
         body = json.loads(req.content)
         names = {s["name"] for s in body["samples"]}
         assert "retention_rate" in names
@@ -355,17 +385,18 @@ class TestAnalyticsClientLive:
         sample_metrics: VideoMetrics,
     ):
         """Sample values in the payload must match the input VideoMetrics."""
+        _mock_agent_list(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            url=f"{_BASE_URL}/agents/{_AGENT_UUID}/metrics",
             status_code=202,
         )
 
         client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
-        client.push(sample_metrics, "marketing-shorts-agent")
+        client.push(sample_metrics, _AGENT_NAME)
 
         import json
-        req = httpx_mock.get_requests()[0]
+        req = httpx_mock.get_requests()[-1]
         body = json.loads(req.content)
         by_name = {s["name"]: s["value"] for s in body["samples"]}
         assert by_name["retention_rate"] == pytest.approx(0.71)
@@ -625,9 +656,10 @@ class TestAnalyticsVersionIdPropagation:
         import json
         from marketing_shorts_agent.analytics.interface import VideoMetrics
 
+        _mock_agent_list(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            url=f"{_BASE_URL}/agents/{_AGENT_UUID}/metrics",
             status_code=202,
         )
 
@@ -640,9 +672,9 @@ class TestAnalyticsVersionIdPropagation:
             extra={"version_id": "v-from-register-001"},
         )
         client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
-        client.push(metrics, "marketing-shorts-agent")
+        client.push(metrics, _AGENT_NAME)
 
-        body = json.loads(httpx_mock.get_requests()[0].content)
+        body = json.loads(httpx_mock.get_requests()[-1].content)
         assert body["versionId"] == "v-from-register-001"
 
     def test_push_uses_empty_string_when_version_id_absent(
@@ -653,19 +685,225 @@ class TestAnalyticsVersionIdPropagation:
         import json
         from marketing_shorts_agent.analytics.interface import VideoMetrics
 
+        _mock_agent_list(httpx_mock)
         httpx_mock.add_response(
             method="POST",
-            url=f"{_BASE_URL}/agents/marketing-shorts-agent/metrics",
+            url=f"{_BASE_URL}/agents/{_AGENT_UUID}/metrics",
             status_code=202,
         )
 
         metrics = VideoMetrics(video_id="yt-xyz", views=0, average_view_duration_sec=0.0, retention_rate=0.0, likes=0)
         client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
-        client.push(metrics, "marketing-shorts-agent")
+        client.push(metrics, _AGENT_NAME)
 
-        body = json.loads(httpx_mock.get_requests()[0].content)
+        body = json.loads(httpx_mock.get_requests()[-1].content)
         assert body["versionId"] == ""
-        assert body["versionId"] != "marketing-shorts-agent"
+        assert body["versionId"] != _AGENT_NAME
+
+
+# ── Bug fix: version POST 404 → stale-cache recovery ─────────────────────────
+
+
+class TestVersionRegisterStaleCache:
+    """Bug fix (a)(b): version POST 404 triggers cache invalidation + one retry."""
+
+    def test_version_post_404_triggers_re_ensure_and_retry_success(
+        self,
+        httpx_mock: HTTPXMock,
+        version_record: VersionRecord,
+    ):
+        """(a) When version POST returns 404 (stale agentId), the client invalidates
+        the cache, re-ensures the agent, and retries the POST exactly once."""
+        stale_uuid = "stale-agent-uuid-old"
+        fresh_uuid = "fresh-agent-uuid-new"
+
+        # First agent resolution (GET /agents → stale uuid still in list initially)
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[{"agentId": stale_uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+        )
+        # Version POST with stale uuid → 404 (platform was restarted)
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{stale_uuid}/versions",
+            status_code=404,
+            json={"error": "agent not found"},
+        )
+        # Re-ensure: GET /agents now returns the fresh uuid (or empty → POST creates)
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[{"agentId": fresh_uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+        )
+        # Retry version POST with fresh uuid → success
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{fresh_uuid}/versions",
+            status_code=201,
+            json={"versionId": "v-retry-success", "createdAt": "2026-01-01T00:00:00Z"},
+        )
+
+        client = AgentOpsVersionRegisterClient(base_url=_BASE_URL, dry_run=False)
+        result = client.register(version_record)
+        assert result == "v-retry-success"
+
+        requests = httpx_mock.get_requests()
+        # Request sequence: GET, POST(404), GET(re-resolve), POST(retry)
+        assert requests[0].method == "GET"   # initial resolve
+        assert requests[1].method == "POST"  # stale version POST (404)
+        assert requests[2].method == "GET"   # re-resolve after cache invalidation
+        assert requests[3].method == "POST"  # retry with fresh uuid
+        assert fresh_uuid in str(requests[3].url)
+
+    def test_version_post_404_retry_also_fails_raises_non_fatally(
+        self,
+        httpx_mock: HTTPXMock,
+        version_record: VersionRecord,
+    ):
+        """(b) When the retry also fails, the exception propagates (non-fatal to
+        the pipeline, but the client itself raises so the caller can decide)."""
+        stale_uuid = "stale-uuid-both-fail"
+        fresh_uuid = "fresh-uuid-both-fail"
+
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[{"agentId": stale_uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{stale_uuid}/versions",
+            status_code=404,
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[{"agentId": fresh_uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+        )
+        # Retry also returns 404
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{fresh_uuid}/versions",
+            status_code=404,
+        )
+
+        client = AgentOpsVersionRegisterClient(base_url=_BASE_URL, dry_run=False)
+        import httpx as _httpx
+        with pytest.raises(_httpx.HTTPStatusError) as exc_info:
+            client.register(version_record)
+        assert exc_info.value.response.status_code == 404
+
+    def test_version_post_non_404_error_is_not_retried(
+        self,
+        httpx_mock: HTTPXMock,
+        version_record: VersionRecord,
+    ):
+        """Non-404 HTTP errors (e.g., 500) are re-raised immediately without retry."""
+        some_uuid = "agent-uuid-500"
+
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[{"agentId": some_uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+        )
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{some_uuid}/versions",
+            status_code=500,
+        )
+
+        client = AgentOpsVersionRegisterClient(base_url=_BASE_URL, dry_run=False)
+        import httpx as _httpx
+        with pytest.raises(_httpx.HTTPStatusError) as exc_info:
+            client.register(version_record)
+        assert exc_info.value.response.status_code == 500
+
+        requests = httpx_mock.get_requests()
+        # Only 2 requests: GET /agents + POST /versions (no retry)
+        assert len(requests) == 2
+
+
+# ── Bug fix: analytics uses resolved UUID path ────────────────────────────────
+
+
+class TestAnalyticsStaleCache:
+    """Bug fix (c)(d): analytics push uses UUID path and recovers from 404."""
+
+    def test_push_uses_resolved_uuid_not_agent_name(
+        self,
+        httpx_mock: HTTPXMock,
+        sample_metrics: VideoMetrics,
+    ):
+        """(c) metrics path must be /agents/{uuid}/metrics, not /agents/{name}/metrics."""
+        _mock_agent_list(httpx_mock)
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{_AGENT_UUID}/metrics",
+            status_code=202,
+        )
+
+        client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
+        client.push(sample_metrics, _AGENT_NAME)
+
+        requests = httpx_mock.get_requests()
+        metrics_req = requests[-1]
+        assert metrics_req.method == "POST"
+        assert _AGENT_UUID in str(metrics_req.url)
+        # Critically, the raw agent name must NOT appear in the path
+        assert f"/agents/{_AGENT_NAME}/metrics" not in str(metrics_req.url)
+
+    def test_push_metrics_404_triggers_re_resolve_and_retry(
+        self,
+        httpx_mock: HTTPXMock,
+        sample_metrics: VideoMetrics,
+    ):
+        """(d) When metrics POST returns 404 (stale uuid), the client re-resolves
+        and retries with the fresh uuid exactly once."""
+        stale_uuid = "stale-metrics-uuid-old"
+        fresh_uuid = "fresh-metrics-uuid-new"
+
+        # Initial GET /agents → stale uuid
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[{"agentId": stale_uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+        )
+        # metrics POST with stale uuid → 404
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{stale_uuid}/metrics",
+            status_code=404,
+        )
+        # Re-resolve GET /agents → fresh uuid
+        httpx_mock.add_response(
+            method="GET",
+            url=f"{_BASE_URL}/agents",
+            status_code=200,
+            json=[{"agentId": fresh_uuid, "name": _AGENT_NAME, "runtime": "adk-cloud-run"}],
+        )
+        # Retry with fresh uuid → success
+        httpx_mock.add_response(
+            method="POST",
+            url=f"{_BASE_URL}/agents/{fresh_uuid}/metrics",
+            status_code=202,
+        )
+
+        client = AgentOpsAnalyticsClient(base_url=_BASE_URL, dry_run=False)
+        client.push(sample_metrics, _AGENT_NAME)  # must not raise
+
+        requests = httpx_mock.get_requests()
+        assert requests[0].method == "GET"   # initial resolve
+        assert requests[1].method == "POST"  # stale metrics POST (404)
+        assert requests[2].method == "GET"   # re-resolve
+        assert requests[3].method == "POST"  # retry with fresh uuid
+        assert fresh_uuid in str(requests[3].url)
 
 
 # ── Regression: renderer_stub duration is shot-based ─────────────────────────
