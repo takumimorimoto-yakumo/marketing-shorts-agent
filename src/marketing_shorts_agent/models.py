@@ -170,3 +170,31 @@ class RenderJob(BaseModel):
 class RendererError(BaseModel):
     code: str
     message: str
+
+
+# ── Video QA models (pipeline result serialisation) ───────────────────────────
+
+
+class QaCheckItem(BaseModel):
+    """One deterministic check result for inclusion in PipelineResult."""
+
+    name: str
+    passed: bool
+    detail: str = ""
+
+
+class QaVerdictResult(BaseModel):
+    """Serialisable video QA outcome embedded in :class:`PipelineResult`.
+
+    This is a Pydantic mirror of the :class:`~marketing_shorts_agent.video_qa.QaResult`
+    dataclass, kept separate so the pipeline domain model does not import the
+    video_qa module directly (avoids circular imports).
+    """
+
+    verdict: str
+    """``'pass'``, ``'fail'``, or ``'error'``."""
+    deterministic_checks: list[QaCheckItem] = Field(default_factory=list)
+    visual_passed: bool | None = None
+    visual_reason: str = ""
+    visual_rubric_scores: dict[str, float] = Field(default_factory=dict)
+    error: str = ""

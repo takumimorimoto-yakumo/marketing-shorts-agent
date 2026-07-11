@@ -14,9 +14,10 @@ Pipeline stages:
   4. Storyboard generation — via HTTP storyboard service or bundled stub
   5. YMYL guard (storyboard)
   6. Renderer submit + wait — via HTTP renderer service or bundled stub
-  7. Publisher (dry-run by default)
-  8. Version register  ← must precede analytics so versionId is available
-  9. Analytics push    ← receives the real versionId from step 8
+  7. Video QA — deterministic ffprobe checks + Gemini visual judgment (fail-closed)
+  8. Publisher (dry-run by default; skipped if Video QA fails)
+  9. Version register  ← must precede analytics so versionId is available
+ 10. Analytics push    ← receives the real versionId from step 9; includes QA metrics
 
 Bring-your-own services:
   Set ``content_url``, ``storyboard_url``, or ``renderer_base_url`` in
@@ -40,12 +41,13 @@ from ..guards import (
     enforce_script_ymyl,
     enforce_storyboard_ymyl,
 )
-from ..models import FigureItem, RenderJob, Script, Storyboard
+from ..models import FigureItem, QaCheckItem, QaVerdictResult, RenderJob, Script, Storyboard
 from ..publisher import DryRunPublisher, PublishResult, PublisherInterface
 from ..renderer import RendererClient, RendererClientError
 from ..storyboard import ExampleStoryboardGenerator, StoryboardGeneratorInterface
 from ..storyboard.client import StoryboardServiceClient
 from ..version_register import VersionRecord, VersionRegisterInterface, VersionRegisterStub
+from ..video_qa import QaResult, QaVerdict, VideoQAInterface, VideoQAStub
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +137,14 @@ class PipelineConfig:
     version_register: VersionRegisterInterface | None = None
     """Override the version register.  Defaults to VersionRegisterStub."""
 
+    video_qa: VideoQAInterface | None = None
+    """Override the video QA implementation.  Defaults to VideoQAStub.
+
+    Set to a :class:`~marketing_shorts_agent.video_qa.VideoQAClient` instance
+    to enable real ffprobe + Gemini visual checks.  The stage is fail-closed:
+    QA errors prevent publishing.
+    """
+
     agent_version: str = "0.1.0"
     agent_id: str = "marketing-shorts-agent"
 
@@ -153,6 +163,8 @@ class PipelineResult:
     publish_result: PublishResult | None = None
     version_id: str = ""
     errors: list[str] = field(default_factory=list)
+    qa_verdict: QaVerdictResult | None = None
+    """Structured Video QA result.  None only when QA was not reached (earlier stage failed)."""
 
     @property
     def success(self) -> bool:
@@ -190,6 +202,7 @@ class PipelineOrchestrator:
         self._publisher = config.publisher or DryRunPublisher()
         self._analytics = config.analytics or AnalyticsStub()
         self._version_register = config.version_register or VersionRegisterStub()
+        self._video_qa = config.video_qa or VideoQAStub()
 
         # Content generator: explicit > URL > bundled stub (in-process)
         if config.content_generator is not None:
@@ -269,14 +282,58 @@ class PipelineOrchestrator:
             extra={"render_id": render_job.render_id, "state": render_job.state},
         )
 
-        # 7. Publisher
+        # 7. Video QA — fail-closed gate between render and publish.
+        #    Deterministic ffprobe checks + Gemini visual judgment.
+        #    On QA failure or error: publish is skipped, pipeline errors recorded.
         video_path = render_job.video_url or ""
+        qa_result: QaResult
+        expected_duration = render_job.duration_sec  # may be None for placeholder URLs
+        try:
+            qa_result = self._video_qa.run(
+                video_path, expected_duration_sec=expected_duration
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Treat QA infrastructure errors as fail-closed (no publish)
+            from ..video_qa import QaResult as _QaResult  # noqa: PLC0415
+
+            qa_result = _QaResult(
+                verdict=QaVerdict.ERROR,
+                error=f"VideoQA raised unexpected exception: {exc}",
+            )
+
+        qa_verdict_result = _build_qa_verdict_result(qa_result)
+        logger.info(
+            "Video QA complete",
+            extra={"verdict": qa_result.verdict.value, "video_path": video_path},
+        )
+
+        if not qa_result.passed:
+            # Publish skipped; record errors and return immediately
+            errors = [
+                f"Video QA {qa_result.verdict.value}: "
+                + (qa_result.error or _summarise_qa_failures(qa_result))
+            ]
+            logger.warning(
+                "Video QA failed — publish skipped",
+                extra={"verdict": qa_result.verdict.value, "errors": errors},
+            )
+            return PipelineResult(
+                ticker=stock_info.ticker,
+                script=script,
+                storyboard=storyboard,
+                render_job=render_job,
+                publish_result=None,
+                errors=errors,
+                qa_verdict=qa_verdict_result,
+            )
+
+        # 8. Publisher (only reached when QA passes)
         publish_result = self._publisher.publish(
             video_path, storyboard, dry_run=self._config.dry_run
         )
         logger.info("Publish complete", extra={"video_id": publish_result.video_id})
 
-        # 8. Version register — must run before analytics so the real versionId
+        # 9. Version register — must run before analytics so the real versionId
         #    is available to embed in MetricIngest.versionId (avoids agent_id fallback).
         #    Failures are non-fatal: agentops is an observability side-channel and must
         #    not block the primary pipeline result.
@@ -294,12 +351,14 @@ class PipelineOrchestrator:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Version register step failed (non-fatal): %s", exc)
 
-        # 9. Analytics (best-effort — don't fail the pipeline).
-        #    Pass version_id via metrics.extra so _build_payload can embed the
-        #    real versionId (registered in step 8) in MetricIngest.
+        # 10. Analytics (best-effort — don't fail the pipeline).
+        #     Pass version_id and QA metrics via metrics.extra so _build_payload
+        #     can embed the real versionId (registered in step 9) in MetricIngest.
+        #     QA metrics are merged here so they appear in agentops as outcome metrics.
         try:
             metrics = self._analytics.pull(publish_result.video_id)
             metrics.extra["version_id"] = version_id
+            metrics.extra.update(qa_result.to_metrics())
             self._analytics.push(metrics, self._config.agent_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Analytics step failed (non-fatal): %s", exc)
@@ -311,9 +370,47 @@ class PipelineOrchestrator:
             render_job=render_job,
             publish_result=publish_result,
             version_id=version_id,
+            qa_verdict=qa_verdict_result,
         )
 
     def _render(self, storyboard: Storyboard) -> RenderJob:
         with RendererClient(base_url=self._config.renderer_base_url) as client:
             job = client.submit(storyboard)
             return client.wait(job.render_id, poll_interval_sec=0.1)
+
+
+# ── Module-level helpers ───────────────────────────────────────────────────────
+
+
+def _build_qa_verdict_result(qa_result: QaResult) -> QaVerdictResult:
+    """Convert a QaResult dataclass to a Pydantic-serialisable QaVerdictResult."""
+    checks = [
+        QaCheckItem(name=c.name, passed=c.passed, detail=c.detail)
+        for c in qa_result.deterministic_checks
+    ]
+    visual_passed: bool | None = None
+    visual_reason = ""
+    visual_rubric: dict[str, float] = {}
+    if qa_result.visual_check is not None:
+        visual_passed = qa_result.visual_check.passed
+        visual_reason = qa_result.visual_check.reason
+        visual_rubric = dict(qa_result.visual_check.rubric_scores)
+    return QaVerdictResult(
+        verdict=qa_result.verdict.value,
+        deterministic_checks=checks,
+        visual_passed=visual_passed,
+        visual_reason=visual_reason,
+        visual_rubric_scores=visual_rubric,
+        error=qa_result.error,
+    )
+
+
+def _summarise_qa_failures(qa_result: QaResult) -> str:
+    """Build a short failure summary string for pipeline error reporting."""
+    parts: list[str] = []
+    for check in qa_result.deterministic_checks:
+        if not check.passed:
+            parts.append(f"{check.name}: {check.detail or 'failed'}")
+    if qa_result.visual_check is not None and not qa_result.visual_check.passed:
+        parts.append(f"visual: {qa_result.visual_check.reason or 'failed'}")
+    return "; ".join(parts) if parts else "unknown failure"
