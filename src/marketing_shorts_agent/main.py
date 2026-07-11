@@ -36,7 +36,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .content import StockInfo
-from .models import FigureItem
+from .models import FigureItem, QaVerdictResult
 from .pipeline import PipelineConfig, PipelineOrchestrator, PipelineResult
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
@@ -79,6 +79,8 @@ class PipelineResultResponse(BaseModel):
     render_job_state: str
     video_url: str | None
     publish_result: PublishResultResponse | None
+    qa_verdict: QaVerdictResult | None = None
+    """Video QA result — pass/fail verdict, deterministic check details, visual judgment."""
 
 
 def _to_response(result: PipelineResult) -> PipelineResultResponse:
@@ -99,6 +101,7 @@ def _to_response(result: PipelineResult) -> PipelineResultResponse:
         render_job_state=result.render_job.state.value,
         video_url=result.render_job.video_url,
         publish_result=pub,
+        qa_verdict=result.qa_verdict,
     )
 
 
@@ -142,6 +145,28 @@ def _build_orchestrator() -> PipelineOrchestrator:
     agentops_agent_id: str = os.environ.get("AGENTOPS_AGENT_ID", "marketing-shorts-agent").strip()
     agentops_api_key: str = os.environ.get("AGENTOPS_API_KEY", "").strip()
 
+    # ── Video QA ─────────────────────────────────────────────────────────────
+    video_qa_use_gemini_str: str = os.environ.get("VIDEO_QA_USE_GEMINI", "false").strip().lower()
+    video_qa_use_gemini: bool = video_qa_use_gemini_str in ("true", "1", "yes")
+    video_qa_gemini_backend: str = os.environ.get("VIDEO_QA_GEMINI_BACKEND", "genai").strip()
+
+    video_qa = None
+    if video_qa_use_gemini:
+        from .video_qa import VideoQAClient  # noqa: PLC0415
+
+        video_qa = VideoQAClient(
+            gemini_model=os.environ.get("GEMINI_EVAL_MODEL", "gemini-2.5-flash").strip(),
+            gemini_backend=video_qa_gemini_backend,
+            gcp_project=os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip(),
+            gcp_region=os.environ.get("GOOGLE_CLOUD_REGION", "us-central1").strip(),
+        )
+        logger.info(
+            "VideoQA live client configured",
+            extra={"backend": video_qa_gemini_backend},
+        )
+    else:
+        logger.info("VIDEO_QA_USE_GEMINI not set; VideoQAStub used (always passes)")
+
     version_register = None
     analytics = None
 
@@ -183,6 +208,7 @@ def _build_orchestrator() -> PipelineOrchestrator:
         agent_id=agentops_agent_id,
         version_register=version_register,
         analytics=analytics,
+        video_qa=video_qa,
     )
     logger.info(
         "Building PipelineOrchestrator",
@@ -237,9 +263,10 @@ _PIPELINE_STAGES = [
     "Storyboard generation — via external storyboard service or bundled stub",
     "YMYL guard (storyboard)",
     "Renderer submit &amp; wait — via external renderer or bundled renderer-stub",
-    "Publisher — YouTube Shorts upload (dry-run by default)",
+    "Video QA — deterministic ffprobe checks + Gemini visual judgment (fail-closed gate)",
+    "Publisher — YouTube Shorts upload (dry-run by default; skipped if Video QA fails)",
     "Version register",
-    "Analytics push",
+    "Analytics push — includes Video QA outcome metrics to agentops-platform",
 ]
 
 _LANDING_HTML = """\

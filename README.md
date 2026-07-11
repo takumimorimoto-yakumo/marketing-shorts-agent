@@ -10,7 +10,8 @@ Built for the DevOps × AI Agent Hackathon 2026.
 
 - Generates short-form stock commentary scripts with Gemini from pluggable templates (generic examples bundled)
 - Renders videos via an external renderer service over HTTP (a stub renderer — black background + text mp4 — is bundled so the pipeline runs end-to-end)
-- Publishes to YouTube Shorts and feeds Analytics back into agentops-platform's evaluation loop
+- **Autonomously evaluates its own rendered videos** with a two-layer Video QA stage (deterministic ffprobe checks + Gemini multimodal visual judgment) and blocks publishing on failure — a self-managing agent that governs its own output quality
+- Publishes to YouTube Shorts and feeds Analytics back into agentops-platform's evaluation loop, including Video QA outcome metrics
 - Enforces YMYL guards: no stock recommendations (template-level + Gemini eval detection), mandatory disclaimer captions, official primary data sources only (EDINET / J-Quants)
 
 This repository is intentionally **specific to メイガラシリタイ**: one channel, one format, short-form only.
@@ -48,9 +49,59 @@ This is a **managed agent**: it does the real task (making Shorts) and is *opera
   ├ renderer client ──HTTP──> renderer service  (OpenAPI contract: api/renderer.openapi.yaml)
   │                            (renderer-stub bundled for local/E2E and CI)
   │
+  ├ video QA (self-evaluation gate — fail-closed)
+  │   Layer 1 — deterministic: ffprobe stream/duration checks, black/white frame detection
+  │   Layer 2 — visual LLM:    sampled frames → Gemini multimodal rubric (text legibility /
+  │                             layout / readability), structured JSON output
+  │   Gate: QA fail or error → publish skipped; QA metrics pushed to agentops-platform
+  │
   ├ evaluator hook → agentops-platform
-  └ publisher      (YouTube Shorts upload)
+  └ publisher      (YouTube Shorts upload; only reached when Video QA passes)
 ```
+
+### Pipeline stages
+
+| # | Stage | Description |
+|---|---|---|
+| 1 | Content generation | Script via HTTP content service or bundled stub |
+| 2 | YMYL guard (script) | Disclaimer presence + no stock-recommendation phrasing |
+| 3 | Evaluator hook | Trajectory / drift scoring via agentops-platform |
+| 4 | Storyboard generation | Storyboard via HTTP storyboard service or bundled stub |
+| 5 | YMYL guard (storyboard) | Same rules applied to the rendered storyboard |
+| 6 | Renderer | Submit storyboard + wait for render job to complete |
+| 7 | **Video QA** | **Fail-closed self-evaluation: deterministic ffprobe checks + Gemini visual judgment (see below)** |
+| 8 | Publisher | YouTube Shorts upload (dry-run by default; **skipped if Video QA fails**) |
+| 9 | Version register | Register agent version with agentops-platform |
+| 10 | Analytics push | Push outcome metrics to agentops-platform (**includes QA verdict metrics**) |
+
+### Video QA stage (stage 7)
+
+The agent autonomously evaluates the video it just rendered before deciding whether to publish.
+
+**Layer 1 — Deterministic checks (no LLM, always run):**
+- Video stream present (ffprobe JSON probe)
+- Duration within ±20 % of expected value
+- No fully-black frames (luminance mean ≤ 10 at 10 / 50 / 90 % of duration)
+- No fully-white frames (luminance mean ≥ 245 at same sample points)
+
+**Layer 2 — Visual LLM judgment (Gemini multimodal, when deterministic checks pass):**
+- Three frames sampled from the video (10 / 50 / 90 % of duration)
+- Sent to Gemini with a structured rubric prompt
+- Scored on: `text_legibility`, `layout`, `readability` (each 0.0–1.0)
+- Structured JSON output parsed deterministically — no free-form text
+
+**Gate behaviour (fail-closed):**
+- Any deterministic check fails → FAIL, publish skipped
+- Deterministic checks pass, visual check fails → FAIL, publish skipped
+- QA infrastructure error → ERROR, publish skipped (never silently unblocked)
+
+**agentops metrics pushed** (numeric, per run): `video_qa_pass`, `video_qa_video_stream_present`, `video_qa_duration_in_range`, `video_qa_no_black_frames`, `video_qa_no_white_frames`, `video_qa_visual_pass`, `video_qa_visual_text_legibility`, `video_qa_visual_layout`, `video_qa_visual_readability`.
+
+**Environment variables:**
+| Variable | Default | Description |
+|---|---|---|
+| `VIDEO_QA_USE_GEMINI` | `false` | `true` → real ffprobe + Gemini checks; `false` → stub (always passes) |
+| `VIDEO_QA_GEMINI_BACKEND` | `genai` | `genai` (google-generativeai) or `vertex` (Vertex AI). ADC only — no API key. |
 
 Stack: ADK / Gemini API / Veo / Imagen / Chirp / Lyria / Cloud Run / BigQuery.
 

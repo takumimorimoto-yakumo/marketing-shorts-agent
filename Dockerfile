@@ -19,6 +19,13 @@ RUN pip wheel --no-cache-dir --wheel-dir /dist .
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim AS runtime
 
+# Install ffmpeg and ffprobe — required for video_qa deterministic checks.
+# ffprobe: stream detection, duration validation, luminance sampling.
+# ffmpeg: frame extraction for visual LLM judgment.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Security: non-root user
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 

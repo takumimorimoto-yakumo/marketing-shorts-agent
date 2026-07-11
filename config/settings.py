@@ -69,6 +69,19 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── Video QA ─────────────────────────────────────────────────────────────
+    video_qa_use_gemini: bool = Field(
+        default=False,
+        description=(
+            "When True, use the real VideoQAClient (ffprobe + Gemini multimodal visual check). "
+            "When False (default), use VideoQAStub (always passes, no external deps)."
+        ),
+    )
+    video_qa_gemini_backend: str = Field(
+        default="genai",
+        description="Gemini backend for visual QA: 'genai' (google-generativeai) or 'vertex'.",
+    )
+
     # ── Runtime ──────────────────────────────────────────────────────────────
     dry_run: bool = Field(default=True)
     log_level: str = Field(default="INFO")
