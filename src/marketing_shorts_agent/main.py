@@ -257,77 +257,187 @@ app = FastAPI(
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 _PIPELINE_STAGES = [
-    "Content generation (script) — via external content service or bundled stub",
-    "YMYL guard (script) — disclaimer &amp; recommendation check",
-    "Evaluator hook — trajectory / drift scoring",
-    "Storyboard generation — via external storyboard service or bundled stub",
-    "YMYL guard (storyboard)",
-    "Renderer submit &amp; wait — via external renderer or bundled renderer-stub",
-    "Video QA — deterministic ffprobe checks + Gemini visual judgment (fail-closed gate)",
-    "Publisher — YouTube Shorts upload (dry-run by default; skipped if Video QA fails)",
-    "Version register",
-    "Analytics push — includes Video QA outcome metrics to agentops-platform",
+    ("Content generation（スクリプト生成）", "決算データから YouTube Shorts 台本を自動生成する。外部 content サービスまたは組み込みスタブを使用。"),
+    ("YMYL guard（スクリプト）", "投資推奨・数値改変がないかチェックする YMYL ガード。免責事項が含まれているか、推奨表現がないかを確認する。"),
+    ("Evaluator hook（軌跡評価）", "AgentOps Platform へパイプライン軌跡・ドリフトスコアを送信する評価フック。"),
+    ("Storyboard generation（絵コンテ生成）", "台本を元に各カットの構成・テキスト・レイアウトを定義した絵コンテを生成する。"),
+    ("YMYL guard（絵コンテ）", "絵コンテに投資推奨・不適切な数値表現が含まれていないかを再確認するガード。"),
+    ("Renderer submit &amp; wait（レンダリング）", "外部レンダラーまたは組み込み renderer-stub に映像生成ジョブを送信し、完了を待機する。"),
+    ("Video QA（映像品質検証）", "ffprobe による決定論的チェック（解像度・コーデック等）と Gemini 視覚判定を組み合わせた fail-closed ゲート。スタブ出力を却下することは意図した挙動。"),
+    ("Publisher（公開）", "YouTube Shorts へアップロードする。デフォルトはドライラン。Video QA 不合格の場合はスキップされる。"),
+    ("Version register（バージョン登録）", "AgentOps Platform にパイプライン実行バージョンを自動登録する。"),
+    ("Analytics push（メトリクス送信）", "Video QA 結果を含むパイプライン実行メトリクスを AgentOps Platform へ送信する。"),
 ]
 
 _LANDING_HTML = """\
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>marketing-shorts-agent</title>
   <style>
+    *, *::before, *::after {{ box-sizing: border-box; }}
     body {{
-      font-family: system-ui, -apple-system, sans-serif;
-      max-width: 760px;
-      margin: 48px auto;
-      padding: 0 24px;
-      color: #1a1a1a;
-      line-height: 1.6;
+      font-family: "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 48px 24px 80px;
+      color: #111;
+      background: #fff;
+      line-height: 1.7;
     }}
-    h1 {{ font-size: 1.75rem; margin-bottom: 0.25rem; }}
-    h2 {{ font-size: 1.15rem; margin-top: 2rem; color: #333; }}
-    .tagline {{ color: #555; margin-top: 0.25rem; font-size: 1.05rem; }}
-    ol li {{ margin-bottom: 0.3rem; }}
+    h1 {{
+      font-size: 1.6rem;
+      font-weight: 700;
+      margin: 0 0 0.2rem;
+      letter-spacing: -0.01em;
+    }}
+    .sub {{ color: #555; font-size: 0.85rem; margin: 0 0 0.6rem; }}
+    .tagline {{
+      font-size: 1.05rem;
+      color: #222;
+      margin: 0 0 2rem;
+      padding: 0.75rem 1rem;
+      border-left: 3px solid #111;
+      background: #f8f8f8;
+    }}
+    h2 {{
+      font-size: 1rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #444;
+      margin: 2.5rem 0 0.75rem;
+      padding-bottom: 0.3rem;
+      border-bottom: 1px solid #ddd;
+    }}
+    .stages {{ list-style: none; padding: 0; margin: 0; }}
+    .stages li {{
+      display: flex;
+      gap: 0.75rem;
+      padding: 0.5rem 0;
+      border-bottom: 1px solid #f0f0f0;
+    }}
+    .stage-num {{
+      flex-shrink: 0;
+      width: 1.6rem;
+      height: 1.6rem;
+      background: #111;
+      color: #fff;
+      border-radius: 50%;
+      font-size: 0.75rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 0.15rem;
+    }}
+    .stage-body {{ flex: 1; }}
+    .stage-name {{ font-weight: 600; font-size: 0.9rem; display: block; }}
+    .stage-desc {{ font-size: 0.85rem; color: #555; }}
+    .features {{ list-style: none; padding: 0; margin: 0; }}
+    .features li {{
+      padding: 0.6rem 0.8rem;
+      margin-bottom: 0.5rem;
+      background: #f8f8f8;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }}
+    .features li strong {{ display: block; margin-bottom: 0.2rem; }}
+    .note {{
+      font-size: 0.8rem;
+      color: #777;
+      margin-top: 0.25rem;
+    }}
+    .links {{ list-style: none; padding: 0; margin: 0; }}
+    .links li {{ margin-bottom: 0.5rem; font-size: 0.9rem; }}
     a {{ color: #0057b8; text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
     code {{
       background: #f0f0f0;
       padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 0.9em;
+      border-radius: 3px;
+      font-size: 0.85em;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
     }}
-    .links li {{ list-style: none; margin-bottom: 0.4rem; }}
-    .links {{ padding-left: 0; }}
+    pre {{
+      background: #1a1a1a;
+      color: #e8e8e8;
+      padding: 1rem 1.2rem;
+      border-radius: 6px;
+      overflow-x: auto;
+      font-size: 0.82rem;
+      line-height: 1.6;
+      margin: 0.5rem 0 0;
+    }}
+    .section-links {{ display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.5rem; }}
+    .section-links a {{
+      padding: 0.35rem 0.75rem;
+      border: 1px solid #0057b8;
+      border-radius: 4px;
+      font-size: 0.85rem;
+    }}
+    .section-links a:hover {{ background: #0057b8; color: #fff; text-decoration: none; }}
   </style>
 </head>
 <body>
+
   <h1>marketing-shorts-agent</h1>
+  <p class="sub">DevOps AI Agent Hackathon — AgentOps Platform 連携デモ</p>
   <p class="tagline">
-    An autonomous AI agent that turns Japanese-stock financial data into YouTube Shorts —
-    from script generation through render — in a single pipeline call.
+    決算データから YouTube Shorts を全自動生成する AI エージェント。<br>
+    AgentOps Platform の管理下で稼働する「被管理エージェント」の実例。
   </p>
 
-  <h2>Pipeline stages</h2>
-  <ol>
+  <h2>パイプラインステージ</h2>
+  <ol class="stages">
 {stages}
   </ol>
 
-  <h2>API</h2>
-  <ul class="links">
-    <li><a href="/docs">Interactive API docs (Swagger UI)</a></li>
-    <li><a href="/redoc">ReDoc API reference</a></li>
-    <li><a href="/healthz">Health check — <code>GET /healthz</code></a></li>
+  <h2>主な特徴</h2>
+  <ul class="features">
     <li>
-      Run pipeline — <code>POST /pipeline/run</code>
-      with a JSON body containing <code>ticker</code>, <code>company_name</code>,
-      <code>sector</code>, and <code>figures</code>.
+      <strong>YMYL ガード（投資推奨拒否・数値改変不可）</strong>
+      スクリプト・絵コンテの両段階で「投資推奨を含む文章」「数値の書き換え」を検出してパイプラインを停止する。
+      金融コンテンツ（Your Money or Your Life）の安全基準に準拠する 2 層ガード。
+    </li>
+    <li>
+      <strong>自律 Video QA（決定論 + Gemini 視覚判定・fail-closed）</strong>
+      ffprobe による解像度・コーデック等の決定論的チェックと、Gemini による視覚的品質判定を組み合わせたゲート。
+      いずれかが不合格の場合はパブリッシュをスキップする（fail-closed 設計）。
+      <span class="note">※ スタブモードでは Gemini は実行されず常に pass となる。スタブ出力を却下するケースは <strong>意図した挙動</strong>であり、Video QA が正常に機能していることを示す。</span>
+    </li>
+    <li>
+      <strong>AgentOps 連携（バージョン・メトリクス自動報告・自己回復）</strong>
+      各パイプライン実行のバージョン ID・評価スコア・Video QA 結果を AgentOps Platform へ自動送信する。
+      <code>AGENTOPS_BASE_URL</code> を設定しない場合はスタブが使われ、ネットワーク不要で動作する。
     </li>
   </ul>
+
+  <h2>API の使い方</h2>
+  <p><strong>パイプライン実行</strong> — <code>POST /pipeline/run</code></p>
+  <pre>curl -X POST https://&lt;HOST&gt;/pipeline/run \\
+  -H "Content-Type: application/json" \\
+  -d '{{"ticker":"7203","company_name":"トヨタ自動車","sector":"輸送用機器","figures":[{{"label":"売上高","value":"¥45兆円"}}]}}'</pre>
+
+  <div class="section-links">
+    <a href="/docs">API ドキュメント (Swagger UI)</a>
+    <a href="/redoc">ReDoc</a>
+    <a href="/healthz">ヘルスチェック</a>
+    <a href="https://agentops-platform-nk3aomvl6q-an.a.run.app/dashboard" target="_blank" rel="noopener">AgentOps ダッシュボード ↗</a>
+    <a href="https://github.com/takumimorimoto-yakumo/marketing-shorts-agent" target="_blank" rel="noopener">GitHub ↗</a>
+  </div>
+
 </body>
 </html>
 """.format(
-    stages="\n".join(f"    <li>{stage}</li>" for stage in _PIPELINE_STAGES)
+    stages="\n".join(
+        f'    <li><span class="stage-num">{i + 1}</span>'
+        f'<span class="stage-body"><span class="stage-name">{name}</span>'
+        f'<span class="stage-desc">{desc}</span></span></li>'
+        for i, (name, desc) in enumerate(_PIPELINE_STAGES)
+    )
 )
 
 
