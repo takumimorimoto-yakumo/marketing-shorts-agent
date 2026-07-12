@@ -11,9 +11,13 @@ import threading
 import pytest
 import uvicorn
 
+from unittest.mock import MagicMock, call, patch
+
+from marketing_shorts_agent.analytics.interface import AnalyticsInterface, VideoMetrics
 from marketing_shorts_agent.content import ExampleContentGenerator, StockInfo
 from marketing_shorts_agent.models import FigureItem, RenderJobState
 from marketing_shorts_agent.pipeline import PipelineConfig, PipelineOrchestrator
+from marketing_shorts_agent.video_qa.interface import QaResult, QaVerdict, VideoQAInterface
 
 
 class _ThreadedServer:
@@ -137,3 +141,114 @@ class TestE2EPipeline:
             "version register must run before analytics"
         )
         assert result.version_id, "version_id must not be empty"
+
+
+class TestQaFailAnalyticsPush:
+    """Regression: analytics.push must be called even when Video QA fails.
+
+    QA rejections must be reported to agentops so monitoring captures
+    self-quality-assessment of the managed agent on rejected runs.
+    """
+
+    def _stock_info(self) -> StockInfo:
+        return StockInfo(
+            ticker="7203",
+            company_name="サンプル株式会社",
+            sector="製造業",
+            figures=[
+                FigureItem(label="PER", value="12.3x"),
+                FigureItem(label="PBR", value="1.5x"),
+                FigureItem(label="売上高", value="¥3,000億"),
+            ],
+        )
+
+    def _make_failing_qa(self) -> VideoQAInterface:
+        """Return a VideoQA stub that always returns FAIL verdict."""
+
+        class _FailQA(VideoQAInterface):
+            def run(self, video_path: str, expected_duration_sec: float | None = None) -> QaResult:
+                return QaResult(
+                    verdict=QaVerdict.FAIL,
+                    error="simulated QA failure",
+                )
+
+        return _FailQA()
+
+    def test_analytics_push_called_once_on_qa_fail(self, renderer_stub_url: str) -> None:
+        """analytics.push must be called exactly once when QA fails."""
+        mock_analytics = MagicMock(spec=AnalyticsInterface)
+        mock_analytics.pull.return_value = VideoMetrics(video_id="")
+
+        config = PipelineConfig(
+            renderer_base_url=renderer_stub_url,
+            dry_run=True,
+            video_qa=self._make_failing_qa(),
+            analytics=mock_analytics,
+        )
+        orchestrator = PipelineOrchestrator(config)
+        result = orchestrator.run(self._stock_info())
+
+        # Pipeline must report QA failure (not success)
+        assert not result.success
+        assert result.publish_result is None
+
+        # analytics.push must have been called exactly once despite QA failure
+        assert mock_analytics.push.call_count == 1, (
+            f"Expected analytics.push to be called once on QA fail, "
+            f"got {mock_analytics.push.call_count}"
+        )
+
+    def test_analytics_push_extra_contains_qa_metrics_on_qa_fail(
+        self, renderer_stub_url: str
+    ) -> None:
+        """On QA fail, metrics.extra must contain video_qa_* keys."""
+        pushed_metrics: list[VideoMetrics] = []
+
+        class _CapturingAnalytics(AnalyticsInterface):
+            def pull(self, video_id: str) -> VideoMetrics:
+                return VideoMetrics(video_id=video_id)
+
+            def push(self, metrics: VideoMetrics, agent_id: str) -> None:
+                pushed_metrics.append(metrics)
+
+        config = PipelineConfig(
+            renderer_base_url=renderer_stub_url,
+            dry_run=True,
+            video_qa=self._make_failing_qa(),
+            analytics=_CapturingAnalytics(),
+        )
+        orchestrator = PipelineOrchestrator(config)
+        result = orchestrator.run(self._stock_info())
+
+        assert not result.success
+
+        assert len(pushed_metrics) == 1, (
+            "analytics.push must be called exactly once on QA fail"
+        )
+        extra = pushed_metrics[0].extra
+        qa_keys = [k for k in extra if k.startswith("video_qa_")]
+        assert qa_keys, (
+            f"metrics.extra must contain video_qa_* keys on QA fail; got extra={extra}"
+        )
+        # video_qa_pass must be 0.0 (failed)
+        assert extra.get("video_qa_pass") == pytest.approx(0.0), (
+            "video_qa_pass must be 0.0 when QA fails"
+        )
+
+    def test_publish_not_called_on_qa_fail(self, renderer_stub_url: str) -> None:
+        """Regression guard: QA fail path must NOT publish (existing behaviour intact)."""
+        from marketing_shorts_agent.publisher import PublisherInterface
+
+        mock_publisher = MagicMock(spec=PublisherInterface)
+
+        config = PipelineConfig(
+            renderer_base_url=renderer_stub_url,
+            dry_run=True,
+            video_qa=self._make_failing_qa(),
+            publisher=mock_publisher,
+        )
+        orchestrator = PipelineOrchestrator(config)
+        result = orchestrator.run(self._stock_info())
+
+        assert not result.success
+        mock_publisher.publish.assert_not_called()

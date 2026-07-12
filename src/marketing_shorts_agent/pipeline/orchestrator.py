@@ -32,6 +32,7 @@ import threading
 from dataclasses import dataclass, field
 
 from ..analytics import AnalyticsInterface, AnalyticsStub
+from ..analytics.interface import VideoMetrics
 from ..content import ContentGeneratorInterface, ExampleContentGenerator, StockInfo
 from ..content.client import ContentServiceClient
 from ..evaluator import EvaluatorInterface, EvaluatorStub
@@ -317,6 +318,42 @@ class PipelineOrchestrator:
                 "Video QA failed — publish skipped",
                 extra={"verdict": qa_result.verdict.value, "errors": errors},
             )
+
+            # Best-effort: push QA metrics to agentops even on QA failure.
+            # "被管理エージェントが自己品質評価を報告する" — rejected runs must be
+            # visible in agentops, otherwise monitoring is blind to QA rejections.
+            try:
+                # Best-effort version register so versionId is available in metrics.
+                qa_fail_version_id = ""
+                try:
+                    qa_fail_version_id = self._version_register.register(
+                        VersionRecord(
+                            agent_id=self._config.agent_id,
+                            version=self._config.agent_version,
+                            content_generator_class=type(self._content).__qualname__,
+                            metadata={"ticker": stock_info.ticker, "qa_verdict": qa_result.verdict.value},
+                        )
+                    )
+                    logger.info(
+                        "Version registered (QA-fail path)",
+                        extra={"version_id": qa_fail_version_id},
+                    )
+                except Exception as ver_exc:  # noqa: BLE001
+                    logger.warning("Version register step failed on QA-fail path (non-fatal): %s", ver_exc)
+
+                # Use render_job.render_id as the identifier since no video_id exists.
+                qa_metrics = VideoMetrics(
+                    video_id=render_job.render_id,
+                    extra={
+                        "version_id": qa_fail_version_id,
+                        **qa_result.to_metrics(),
+                    },
+                )
+                self._analytics.push(qa_metrics, self._config.agent_id)
+                logger.info("QA-fail metrics pushed to agentops")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Analytics push on QA-fail path failed (non-fatal): %s", exc)
+
             return PipelineResult(
                 ticker=stock_info.ticker,
                 script=script,
