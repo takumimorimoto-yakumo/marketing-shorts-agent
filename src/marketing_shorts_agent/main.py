@@ -386,7 +386,8 @@ _LANDING_HTML = """\
   <h1>marketing-shorts-agent</h1>
   <p class="sub">DevOps AI Agent Hackathon — AgentOps Platform 連携デモ</p>
   <p class="tagline">
-    決算データから YouTube Shorts を全自動生成する AI エージェント。<br>
+    決算データから YouTube Shorts を生成するパイプラインを、一気通貫で編成・品質保証する AI エージェント。<br>
+    台本・絵コンテ・レンダラは OpenAPI 契約で分離された差し替え可能な外部サービス（同梱スタブで全ステージ検証可能）。<br>
     AgentOps Platform の管理下で稼働する「被管理エージェント」の実例。
   </p>
 
